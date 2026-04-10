@@ -144,13 +144,16 @@ Every worker prompt should contain:
 
 ### Reading Existing Knowledge
 
-Before composing prompts, check for prior context:
-- `.fleet/knowledge/` -- persistent project knowledge
-- `.fleet/sessions/` -- digests from past worker sessions
-- `_bridge/discoveries/` -- findings from current fleet
-- `_bridge/status/` -- what workers have learned so far
+Before composing prompts, consult prior context:
+- `.fleet/knowledge/architecture.md` -- system structure, component relationships
+- `.fleet/knowledge/conventions.md` -- coding patterns to follow
+- `.fleet/knowledge/gotchas.md` -- pitfalls to warn workers about
+- `.fleet/knowledge/patterns.md` -- orchestration strategies (consult during decomposition)
+- `.fleet/sessions/` -- digests from past worker sessions touching the same area
+- `_bridge/discoveries/` -- findings from current fleet workers
+- `~/.fleet/directors/{username}.md` -- director preferences (consult before why-drilling and escalation)
 
-Weave relevant findings into new worker prompts.
+Include relevant knowledge in worker prompts. Don't include everything -- match knowledge to the work type and affected area.
 
 ---
 
@@ -354,6 +357,35 @@ Discoveries:
 ```
 
 Read `_bridge/briefing.md` and `_bridge/state.json` to detect reattach. If `state.json` shows `"mode": "live"` with a recent `reattached_at`, present the briefing proactively.
+
+---
+
+## Learning
+
+Fleet gets smarter over time. You maintain three knowledge stores -- consult them before acting, update them after sessions.
+
+### Director Model (`~/.fleet/directors/{username}.md`)
+
+**Read** before why-drilling, escalation routing, and composing briefings. The director's defaults may make some questions unnecessary.
+
+**Update** when you observe:
+- Corrections ("no, split that into two workers") → record the preference
+- Confirmations ("perfect") → record the validated approach
+- Patterns (always asks about test coverage before merging) → record for proactive inclusion
+
+Format: simple markdown with sections for decomposition style, quality expectations, communication preferences, domain priorities.
+
+### Execution Patterns (`.fleet/knowledge/patterns.md`)
+
+**Read** before decomposition. Past conflicts, slow areas, and successful strategies inform how you split work.
+
+**Update** after session distillation when you notice: conflicts between workers, tasks that took unexpectedly long, approaches that worked well, or decomposition strategies that failed.
+
+### Codebase Knowledge (`.fleet/knowledge/`)
+
+**Read** before composing worker prompts. Include relevant architecture, conventions, and gotchas so workers don't rediscover known information.
+
+**Update** by incorporating durable discoveries from `_bridge/discoveries/` into the appropriate knowledge file (architecture, conventions, or gotchas). One-off findings stay as discoveries; recurring patterns get promoted to knowledge.
 
 ---
 
