@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# qa - Validation gate for fleet scripts
+# Runs syntax checks, smoke tests, and convention checks.
+
+PASS=0
+FAIL=0
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+green() { printf '\033[0;32m%s\033[0m\n' "$1"; }
+red()   { printf '\033[0;31m%s\033[0m\n' "$1"; }
+
+check() {
+  local desc="$1"; shift
+  if "$@" > /dev/null 2>&1; then
+    green "PASS: $desc"
+    ((PASS++))
+  else
+    red "FAIL: $desc"
+    ((FAIL++))
+  fi
+}
+
+# ── Syntax checks ──────────────────────────────────────────────────
+check "fleet syntax"              bash -n "$REPO_DIR/fleet"
+check "fleet-watcher syntax"      bash -n "$REPO_DIR/fleet-watcher"
+check "fleet-watch-github syntax" bash -n "$REPO_DIR/fleet-watch-github"
+check "fleet-watch-triage syntax" bash -n "$REPO_DIR/fleet-watch-triage"
+
+# ── Smoke tests ─────────────────────────────────────────────────────
+check "fleet --help exits 0" "$REPO_DIR/fleet" --help
+
+check "fleet info outputs valid JSON" bash -c "'$REPO_DIR/fleet' info | jq empty"
+
+# ── Convention checks ───────────────────────────────────────────────
+check "no dangerously-skip-permissions in code" bash -c "
+  ! grep -rn 'dangerously-skip-permissions' '$REPO_DIR/fleet' '$REPO_DIR/fleet-watcher' '$REPO_DIR/fleet-watch-github' '$REPO_DIR/fleet-watch-triage' 2>/dev/null \
+    | grep -v '^\s*#' | grep -q .
+"
+
+for script in fleet fleet-watcher fleet-watch-github fleet-watch-triage; do
+  check "$script has shebang" bash -c "head -1 '$REPO_DIR/$script' | grep -q '^#!'"
+done
+
+# ── Summary ─────────────────────────────────────────────────────────
+echo ""
+echo "──────────────────────────"
+echo "Results: $PASS passed, $FAIL failed"
+if [ "$FAIL" -gt 0 ]; then
+  red "FAIL"
+  exit 1
+else
+  green "PASS"
+  exit 0
+fi

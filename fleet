@@ -176,14 +176,25 @@ cmd_spawn() {
   tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --allowedTools 'Bash(*)' Read Edit Write Glob Grep Agent WebFetch WebSearch" Enter
   # Wait for Claude to be ready in this specific pane, then send the task
   local attempt
+  local ready=false
   for attempt in $(seq 1 30); do
     sleep 2
     local pane_content
     pane_content=$(tmux capture-pane -t "$pane_id" -p 2>/dev/null || true)
     if echo "$pane_content" | grep -q "❯"; then
+      ready=true
       break
     fi
   done
+  if ! $ready; then
+    err "Claude failed to start for '${name}' after 60s. Cleaning up..."
+    tmux kill-pane -t "$pane_id" 2>/dev/null || true
+    git -C "$REPO_ROOT" worktree remove --force "$worktree_dir" 2>/dev/null || true
+    git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null || true
+    rm -f "${BRIDGE_DIR}/status/${name}.json" "${BRIDGE_DIR}/log/${name}.jsonl"
+    rm -f "${BRIDGE_DIR}/worker-prompts/${name}-protocol.md" "${BRIDGE_DIR}/worker-prompts/${name}-task.md"
+    exit 1
+  fi
   tmux send-keys -t "$pane_id" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")"
   sleep 0.5
   tmux send-keys -t "$pane_id" Enter
