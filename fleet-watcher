@@ -94,6 +94,22 @@ handle_command() {
     return 0
   fi
 
+  # resume <name> <prompt>
+  if [[ "$lower" =~ ^resume[[:space:]] ]]; then
+    local rest="${text#*[[:space:]]}"
+    local name="${rest%%[[:space:]]*}"
+    local prompt="${rest#*[[:space:]]}"
+    [ "$prompt" = "$name" ] && prompt=""
+    tg_send "Resuming *${name}*..."
+    if "$FLEET_CMD" resume "$name" "$prompt" > /dev/null 2>&1; then
+      tg_send "*${name}* resumed."
+      echo "- **Resumed ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md"
+    else
+      tg_send "Could not resume *${name}*."
+    fi
+    return 0
+  fi
+
   # stop <name>
   if [[ "$lower" =~ ^stop[[:space:]] ]]; then
     local name="${text#*[[:space:]]}"
@@ -161,22 +177,23 @@ Your job:
 3. Respond with a SHORT message (1-3 sentences) that I will send back via Telegram
 
 Available commands:
-- fleet spawn <name> --prompt "..." (run from repo root)
+- fleet spawn <name> --prompt "..." (run from repo root -- starts a new worker)
+- fleet resume <name> "prompt" (sends a prompt to an existing idle worker session)
 - fleet stop <name>
-- Write to _bridge/messages/{worker}.md to send instructions to a worker
+- Write to _bridge/messages/{worker}.md to send instructions to a worker at its next checkpoint
 
 Rules:
 - If the director wants to start new work, use fleet spawn with a rich prompt
 - If they're giving guidance to an existing worker, write to that worker's message file
-- If they're asking a question, answer it from the status files
-- Be decisive. Don't ask clarifying questions -- make your best judgment
+- If the director is asking a question, answer it from the status files
+- Be decisive. Do not ask clarifying questions -- make your best judgment
 - Your LAST line of output will be sent to the director via Telegram. Make it informative and concise.
 PROMPT
 )
 
   local response
   response=$(cd "$repo_root" && claude --print --dangerously-skip-permissions -p "$prompt" 2>/dev/null | tail -5) || {
-    tg_send "Couldn't process that. Try a direct command like: spawn <name> <task>"
+    tg_send "Could not process that. Try a direct command like: spawn <name> <task>"
     return 0
   }
 
@@ -216,11 +233,7 @@ check_status_changes() {
         stakes=$(jq -r '.escalation.stakes // "unknown"' "$sf" 2>/dev/null) || true
 
         if [ -n "$decision" ]; then
-          tg_send "*${name}* needs you (${stakes} stakes):
-
-${decision}
-
-Recommendation: ${recommendation}"
+          tg_send "*${name}* needs you (${stakes} stakes): ${decision} -- Recommendation: ${recommendation}"
         else
           tg_send "*${name}* is ${phase}: ${summary}"
         fi

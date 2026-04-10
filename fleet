@@ -155,6 +155,31 @@ cmd_ls() {
   echo "]"
 }
 
+# ── resume ───────────────────────────────────────────────────────────
+cmd_resume() {
+  local name="${1:-}" prompt="${2:-}"
+  [ -z "$name" ] && { err "Usage: fleet resume <name> [\"prompt\"]"; exit 1; }
+  local worktree_dir="${FLEET_BASE}/${name}"
+  [ -d "$worktree_dir" ] || { err "No worktree for '${name}'"; exit 1; }
+  tmux has-session -t "$SESSION" 2>/dev/null || { err "No fleet tmux session"; exit 1; }
+  # Find the pane running in this worker's worktree
+  local target_pane=""
+  while IFS= read -r line; do
+    local pane_id pane_path
+    pane_id=$(echo "$line" | cut -d: -f1)
+    pane_path=$(echo "$line" | cut -d: -f2-)
+    if [[ "$pane_path" == *"${name}"* ]]; then
+      target_pane="$pane_id"
+      break
+    fi
+  done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}:#{pane_current_path}')
+  [ -z "$target_pane" ] && { err "Could not find pane for '${name}'"; exit 1; }
+  if [ -n "$prompt" ]; then
+    tmux send-keys -t "$target_pane" "$prompt" Enter
+  fi
+  log "Resumed ${name}"
+}
+
 # ── detach / attach ──────────────────────────────────────────────────
 cmd_detach() {
   [ ! -d "$BRIDGE_DIR" ] && { err "No active fleet. Spawn workers first."; exit 1; }
@@ -236,6 +261,7 @@ usage() { sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0; }
 case "${1:-}" in
   spawn)    shift; cmd_spawn "$@" ;;
   stop)     shift; cmd_stop "$@" ;;
+  resume)   shift; cmd_resume "$1" "${*:2}" ;;
   attach)   cmd_attach ;;
   detach)   cmd_detach ;;
   ls)       cmd_ls ;;
