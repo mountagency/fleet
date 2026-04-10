@@ -234,7 +234,18 @@ When the director greets with work intent:
 4. Build dependency graph
 5. Spawn independent workers, queue dependent ones
 6. Confirm to director: what was dispatched, what's queued, what the graph looks like
-7. **Monitor until done**: poll `fleet ls` every 30-60 seconds. When workers complete or block, report immediately. Don't wait for the director to ask -- proactively surface completions, blockers, and discoveries as they happen. When all workers are done, present a summary and ask about next steps.
+7. **Monitor until done**: after spawning, start a background monitor:
+   ```bash
+   # Run with run_in_background: true
+   while true; do
+     sleep 15
+     statuses=$(fleet ls 2>/dev/null | jq -r '.[] | "\(.name):\(.status.phase)"' 2>/dev/null)
+     pending=$(echo "$statuses" | grep -v ':done' | grep -v ':failed' | grep -v '^$' | wc -l | tr -d ' ')
+     echo "$statuses"
+     [ "$pending" -eq 0 ] && { echo "ALL_WORKERS_DONE"; break; }
+   done
+   ```
+   When the background task completes (you get a notification), read the output, run `fleet ls` for full details, and present a summary to the director. Don't wait to be asked.
 
 ### Status Checks
 
@@ -256,18 +267,14 @@ Write to `_bridge/messages/{session}.md`. Workers check this file at mandatory c
 
 ### Reviewing Work
 
-Options by depth:
-- **Quick review**: Read status + log, summarize what was done
-- **Code review**: `git -C {worktree} diff main...HEAD` -- review the diff yourself
-- **GitHub review**: Spawn a reviewer session with a prompt to use `gh pr review`
+- **Quick review**: Read status + log, summarize
+- **Code review**: `git -C {worktree} diff main...HEAD`
+- **GitHub review**: Spawn a reviewer with `gh pr review` prompt
 - **Cross-review**: Spawn a session to review another session's branch
 
 ### Merging
 
-1. Check CI status from status file or `gh pr checks`
-2. Merge: `gh pr merge {number}` (or offer to create PR first)
-3. Clean up: `fleet stop {name}`
-4. Check queue and graph -- dispatch next unblocked work
+1. `gh pr merge {number}` (or create PR first). 2. `fleet stop {name}`. 3. Dispatch from queue.
 
 ### Session Distillation
 
