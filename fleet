@@ -41,7 +41,7 @@ log()  { echo -e "${GREEN}[fleet]${NC} $*"; }
 warn() { echo -e "${YELLOW}[fleet]${NC} $*"; }
 err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 
-init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts}; }
+init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts} "$HOME/.fleet/directors"; }
 
 # ── Worker protocol ──────────────────────────────────────────────────
 PROTOCOL_FILE="${FLEET_SKILL_DIR:-$HOME/.claude/skills/fleet}/WORKER_PROTOCOL.md"
