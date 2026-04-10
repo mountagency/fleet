@@ -1,28 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#
 # fleet - Thin infrastructure for parallel Claude Code sessions
 #
 # Usage:
 #   fleet spawn <name> [--from ref] [--prompt "..." | --prompt-file path]
-#   fleet stop [names...]
-#   fleet attach
-#   fleet ls
-#
+#   fleet stop [names...]   |  fleet attach  |  fleet ls  |  fleet info
 
 # ── Project detection ────────────────────────────────────────────────
-
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 REPO_NAME="$(basename "$REPO_ROOT")"
 FLEET_BASE="$(dirname "$REPO_ROOT")/${REPO_NAME}-fleet"
 BRIDGE_DIR="${FLEET_BASE}/_bridge"
 SESSION="fleet-${REPO_NAME}"
 
-# Auto-detect install command
 detect_install_cmd() {
-  local dir="$1"
-  local cmds=()
+  local dir="$1" cmds=()
   [ -f "$dir/Gemfile" ] && cmds+=("bundle install --quiet 2>/dev/null")
   if [ -f "$dir/package-lock.json" ]; then cmds+=("npm install --silent 2>/dev/null")
   elif [ -f "$dir/yarn.lock" ]; then cmds+=("yarn install --silent 2>/dev/null")
@@ -42,147 +35,90 @@ detect_install_cmd() {
   local IFS=" && "; echo "${cmds[*]}"
 }
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-DIM='\033[2m'
-NC='\033[0m'
-
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[fleet]${NC} $*"; }
 warn() { echo -e "${YELLOW}[fleet]${NC} $*"; }
 err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 
-# ── Bridge setup ─────────────────────────────────────────────────────
-
-init_bridge() {
-  mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries}
-}
+init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts}; }
 
 # ── Worker protocol ──────────────────────────────────────────────────
-
 PROTOCOL_FILE="${FLEET_SKILL_DIR:-$HOME/.claude/skills/fleet}/WORKER_PROTOCOL.md"
 
 generate_worker_prompt() {
-  local session_name="$1"
-  local task_prompt="$2"
-
-  if [ ! -f "$PROTOCOL_FILE" ]; then
-    err "Worker protocol not found at $PROTOCOL_FILE. Run install.sh."
-    exit 1
-  fi
-
+  local session_name="$1" task_prompt="$2"
+  [ ! -f "$PROTOCOL_FILE" ] && { err "Worker protocol not found at $PROTOCOL_FILE. Run install.sh."; exit 1; }
   local protocol
   protocol=$(cat "$PROTOCOL_FILE")
   protocol="${protocol//BRIDGE_DIR/$BRIDGE_DIR}"
   protocol="${protocol//SESSION_NAME/$session_name}"
-
   printf '%s\n\n---\n\n%s' "$task_prompt" "$protocol"
 }
 
 # ── spawn ────────────────────────────────────────────────────────────
-
 cmd_spawn() {
   local name="" from_ref="main" prompt="" prompt_file="" no_install=false
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --from)         from_ref="$2"; shift 2 ;;
-      --prompt)       prompt="$2"; shift 2 ;;
-      --prompt-file)  prompt_file="$2"; shift 2 ;;
-      --no-install)   no_install=true; shift ;;
-      -h|--help)      usage ;;
-      *)              name="$1"; shift ;;
+      --from)        from_ref="$2"; shift 2 ;;
+      --prompt)      prompt="$2"; shift 2 ;;
+      --prompt-file) prompt_file="$2"; shift 2 ;;
+      --no-install)  no_install=true; shift ;;
+      -h|--help)     usage ;;
+      *)             name="$1"; shift ;;
     esac
   done
-
-  if [ -z "$name" ]; then
-    err "Usage: fleet spawn <name> [--from <ref>] [--prompt \"...\"]"
-    exit 1
-  fi
-
-  # Read prompt from file if provided
-  if [ -n "$prompt_file" ] && [ -f "$prompt_file" ]; then
-    prompt=$(cat "$prompt_file")
-  fi
-
-  if [ -z "$prompt" ]; then
-    prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
-  fi
+  [ -z "$name" ] && { err "Usage: fleet spawn <name> [--from <ref>] [--prompt \"...\"]"; exit 1; }
+  [ -n "$prompt_file" ] && [ -f "$prompt_file" ] && prompt=$(cat "$prompt_file")
+  [ -z "$prompt" ] && prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
 
   init_bridge
-
-  local worktree_dir="${FLEET_BASE}/${name}"
-  local branch="fleet/${name}"
-
-  # Create worktree
+  local worktree_dir="${FLEET_BASE}/${name}" branch="fleet/${name}"
   mkdir -p "$FLEET_BASE"
-  if [ -d "$worktree_dir" ]; then
-    warn "Worktree exists, reusing"
+  if [ -d "$worktree_dir" ]; then warn "Worktree exists, reusing"
   elif git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
     git -C "$REPO_ROOT" worktree add "$worktree_dir" "$branch"
-  else
-    git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "$from_ref"
+  else git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "$from_ref"
   fi
 
-  # Generate full prompt (task + protocol)
-  local full_prompt
+  local full_prompt now
   full_prompt=$(generate_worker_prompt "$name" "$prompt")
-
-  local system_prompt_file="${BRIDGE_DIR}/worker-prompts/${name}.md"
-  mkdir -p "${BRIDGE_DIR}/worker-prompts"
-  echo "$full_prompt" > "$system_prompt_file"
-
-  # Initialize status
-  local now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  cat > "$BRIDGE_DIR/status/${name}.json" <<EOF
-{"session":"${name}","phase":"starting","summary":"Session initializing","files_changed":[],"needs_human":false,"blocked_reason":null,"ci_status":null,"started_at":"${now}","updated_at":"${now}"}
-EOF
+  echo "$full_prompt" > "${BRIDGE_DIR}/worker-prompts/${name}.md"
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "{\"session\":\"${name}\",\"phase\":\"starting\",\"summary\":\"Session initializing\",\"files_changed\":[],\"needs_human\":false,\"blocked_reason\":null,\"escalation\":null,\"ci_status\":null,\"started_at\":\"${now}\",\"updated_at\":\"${now}\"}" > "$BRIDGE_DIR/status/${name}.json"
   echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${name}.jsonl"
 
-  # Create tmux pane
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux split-pane -t "$SESSION" -c "$worktree_dir"
-    tmux select-layout -t "$SESSION" tiled
   else
     tmux new-session -d -s "$SESSION" -c "$worktree_dir" -x "$(tput cols)" -y "$(tput lines)"
     tmux set-option -t "$SESSION" remain-on-exit off
   fi
 
-  # Start Claude
   local install_cmd=""
   if ! $no_install; then
     install_cmd=$(detect_install_cmd "$REPO_ROOT")
     [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
   fi
-
-  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${system_prompt_file}')\" --permission-mode acceptEdits" Enter
+  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}.md')\" --permission-mode acceptEdits" Enter
   tmux select-layout -t "$SESSION" tiled
-
-  # Output JSON for the bridge to parse
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
 }
 
 # ── stop ─────────────────────────────────────────────────────────────
-
 cmd_stop() {
   local targets=("$@")
-
   if [ ${#targets[@]} -eq 0 ]; then
     log "Tearing down all fleet worktrees..."
     tmux kill-session -t "$SESSION" 2>/dev/null && log "Killed tmux session" || true
-
     if [ -d "$FLEET_BASE" ]; then
       for dir in "$FLEET_BASE"/*/; do
         [ -d "$dir" ] || continue
-        local name=$(basename "$dir")
-        [ "$name" = "_bridge" ] && continue
-        rm -f "${dir}/.fleet-prompt"
-        git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "Removed $name" || warn "Could not remove $name"
+        local n=$(basename "$dir"); [ "$n" = "_bridge" ] && continue
+        git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "Removed $n" || warn "Could not remove $n"
       done
-      git -C "$REPO_ROOT" branch --list 'fleet/*' | while read -r branch; do
-        branch=$(echo "$branch" | tr -d ' *')
-        git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null && log "Deleted branch $branch" || true
+      git -C "$REPO_ROOT" branch --list 'fleet/*' | while read -r b; do
+        git -C "$REPO_ROOT" branch -D "$(echo "$b" | tr -d ' *')" 2>/dev/null || true
       done
     fi
     git -C "$REPO_ROOT" worktree prune
@@ -192,12 +128,10 @@ cmd_stop() {
       local dir="${FLEET_BASE}/${target}"
       [ -d "$dir" ] || dir="${FLEET_BASE}/issue-${target}"
       if [ -d "$dir" ]; then
-        local name=$(basename "$dir")
-        rm -f "${dir}/.fleet-prompt"
-        git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "Removed ${name}" || warn "Could not remove ${name}"
-        git -C "$REPO_ROOT" branch -D "fleet/${name}" 2>/dev/null || true
-      else
-        warn "No worktree found for '${target}'"
+        local n=$(basename "$dir")
+        git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "Removed $n" || warn "Could not remove $n"
+        git -C "$REPO_ROOT" branch -D "fleet/$n" 2>/dev/null || true
+      else warn "No worktree found for '${target}'"
       fi
     done
     git -C "$REPO_ROOT" worktree prune
@@ -205,60 +139,30 @@ cmd_stop() {
 }
 
 # ── ls ───────────────────────────────────────────────────────────────
-
 cmd_ls() {
-  if [ ! -d "$FLEET_BASE" ]; then
-    echo "[]"
-    return
-  fi
-
-  # Output JSON array for Claude to parse
+  [ ! -d "$FLEET_BASE" ] && { echo "[]"; return; }
   echo "["
   local first=true
   for dir in "$FLEET_BASE"/*/; do
     [ -d "$dir" ] || continue
-    local name=$(basename "$dir")
-    [ "$name" = "_bridge" ] && continue
-
-    local status_file="${BRIDGE_DIR}/status/${name}.json"
-    local status="{}"
-    [ -f "$status_file" ] && status=$(cat "$status_file")
-
-    local branch
-    branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "unknown")
-
-    $first || echo ","
-    first=false
-    echo "  {\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${dir}\",\"status\":${status}}"
+    local n=$(basename "$dir"); [ "$n" = "_bridge" ] && continue
+    local status="{}"; [ -f "${BRIDGE_DIR}/status/${n}.json" ] && status=$(cat "${BRIDGE_DIR}/status/${n}.json")
+    local branch; branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "unknown")
+    $first || echo ","; first=false
+    echo "  {\"name\":\"${n}\",\"branch\":\"${branch}\",\"worktree\":\"${dir}\",\"status\":${status}}"
   done
   echo "]"
 }
 
-# ── attach ───────────────────────────────────────────────────────────
-
+# ── attach / info / main ────────────────────────────────────────────
 cmd_attach() {
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux attach -t "$SESSION"
-  else
-    err "No fleet session. Spawn one first: fleet spawn <name>"
-    exit 1
-  fi
+  if tmux has-session -t "$SESSION" 2>/dev/null; then tmux attach -t "$SESSION"
+  else err "No fleet session. Spawn one first: fleet spawn <name>"; exit 1; fi
 }
 
-# ── info ─────────────────────────────────────────────────────────────
+cmd_info() { echo "{\"repo\":\"${REPO_NAME}\",\"repo_root\":\"${REPO_ROOT}\",\"fleet_base\":\"${FLEET_BASE}\",\"bridge\":\"${BRIDGE_DIR}\",\"tmux_session\":\"${SESSION}\"}"; }
 
-cmd_info() {
-  cat <<EOF
-{"repo":"${REPO_NAME}","repo_root":"${REPO_ROOT}","fleet_base":"${FLEET_BASE}","bridge":"${BRIDGE_DIR}","tmux_session":"${SESSION}"}
-EOF
-}
-
-# ── main ─────────────────────────────────────────────────────────────
-
-usage() {
-  sed -n '3,10p' "$0" | sed 's/^# \?//'
-  exit 0
-}
+usage() { sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0; }
 
 case "${1:-}" in
   spawn)   shift; cmd_spawn "$@" ;;
