@@ -103,7 +103,7 @@ cmd_spawn() {
     install_cmd=$(detect_install_cmd "$REPO_ROOT")
     [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
   fi
-  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --permission-mode acceptEdits" Enter
+  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --dangerously-skip-permissions" Enter
   # Wait for Claude to initialize, then send the task as first message
   sleep 3
   tmux send-keys -t "$SESSION" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
