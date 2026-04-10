@@ -124,7 +124,7 @@ The skill doesn't limit what workers can do. Each worker is a full Claude Code s
 The `skill/WORKER_PROTOCOL.md` is a standalone document given to every worker session. It defines the checkpoint protocol and bridge file conventions:
 
 ```
-{repo}-fleet/
+.fleet-workers/
   _bridge/
     status/{session}.json       # Phase, summary, blockers, CI status
     log/{session}.jsonl          # Append-only event history

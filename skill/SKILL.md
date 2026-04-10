@@ -23,7 +23,7 @@ That's all the script does. Everything else is you.
 
 ## Bridge Directory
 
-The bridge lives at `../{reponame}-fleet/_bridge/`. Get the exact path from `fleet info`.
+The bridge lives at `.fleet-workers/_bridge/` inside the repo. Get the exact path from `fleet info`.
 
 ```
 _bridge/

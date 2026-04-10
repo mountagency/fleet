@@ -11,7 +11,7 @@ set -euo pipefail
 # ── Project detection ────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 REPO_NAME="$(basename "$REPO_ROOT")"
-FLEET_BASE="$(dirname "$REPO_ROOT")/${REPO_NAME}-fleet"
+FLEET_BASE="${REPO_ROOT}/.fleet-workers"
 BRIDGE_DIR="${FLEET_BASE}/_bridge"
 SESSION="fleet-${REPO_NAME}"
 
