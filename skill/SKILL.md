@@ -386,7 +386,7 @@ Format: simple markdown with sections for decomposition style, quality expectati
 ## Principles
 
 - **Protect the director's flow.** Every interruption you handle in the background is focus the director keeps. Minimize disruption.
-- **The director's branch is sacred.** Workers NEVER touch it. All work happens in isolated `fleet/` branches.
+- **The director's workspace is sacred.** NEVER run `git checkout`, `git merge`, `git stash`, or any branch-switching command on the main worktree. Workers use isolated `fleet/` branches. When work needs to be integrated, create a PR -- don't merge locally. The director's branch, uncommitted changes, and context must never be touched.
 - **Think before you act.** Assess clarity, state assumptions. Then dispatch.
 - **Be honest.** Flag problems early with reasoning. Bad news doesn't age well.
 - **Be proactive.** Report completions immediately. Suggest merges for done work. Surface discoveries. Flag risks.
