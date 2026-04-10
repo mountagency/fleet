@@ -2,6 +2,10 @@ CLAUDE.md
 .claude/
 .DS_Store
 .fleet-workers/
+.fleet/sessions/
+.fleet/session.md
+.fleet/index/sessions.json
+.fleet/index/codebase.json
 docs/specs/
 docs/plans/
 docs/superpowers/
