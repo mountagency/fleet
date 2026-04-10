@@ -46,14 +46,14 @@ init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-p
 # ── Worker protocol ──────────────────────────────────────────────────
 PROTOCOL_FILE="${FLEET_SKILL_DIR:-$HOME/.claude/skills/fleet}/WORKER_PROTOCOL.md"
 
-generate_worker_prompt() {
-  local session_name="$1" task_prompt="$2"
+generate_worker_protocol() {
+  local session_name="$1"
   [ ! -f "$PROTOCOL_FILE" ] && { err "Worker protocol not found at $PROTOCOL_FILE. Run install.sh."; exit 1; }
   local protocol
   protocol=$(cat "$PROTOCOL_FILE")
   protocol="${protocol//BRIDGE_DIR/$BRIDGE_DIR}"
   protocol="${protocol//SESSION_NAME/$session_name}"
-  printf '%s\n\n---\n\n%s' "$task_prompt" "$protocol"
+  printf '%s' "$protocol"
 }
 
 # ── spawn ────────────────────────────────────────────────────────────
@@ -82,9 +82,10 @@ cmd_spawn() {
   else git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "$from_ref"
   fi
 
-  local full_prompt now
-  full_prompt=$(generate_worker_prompt "$name" "$prompt")
-  echo "$full_prompt" > "${BRIDGE_DIR}/worker-prompts/${name}.md"
+  local worker_protocol now
+  worker_protocol=$(generate_worker_protocol "$name")
+  echo "$worker_protocol" > "${BRIDGE_DIR}/worker-prompts/${name}-protocol.md"
+  echo "$prompt" > "${BRIDGE_DIR}/worker-prompts/${name}-task.md"
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   echo "{\"session\":\"${name}\",\"phase\":\"starting\",\"summary\":\"Session initializing\",\"files_changed\":[],\"needs_human\":false,\"blocked_reason\":null,\"escalation\":null,\"ci_status\":null,\"started_at\":\"${now}\",\"updated_at\":\"${now}\"}" > "$BRIDGE_DIR/status/${name}.json"
   echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${name}.jsonl"
@@ -101,7 +102,7 @@ cmd_spawn() {
     install_cmd=$(detect_install_cmd "$REPO_ROOT")
     [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
   fi
-  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}.md')\" --permission-mode acceptEdits" Enter
+  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --permission-mode acceptEdits -p \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-task.md')\"" Enter
   tmux select-layout -t "$SESSION" tiled
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
 }
