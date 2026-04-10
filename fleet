@@ -6,6 +6,7 @@ set -euo pipefail
 # Usage:
 #   fleet spawn <name> [--from ref] [--prompt "..." | --prompt-file path]
 #   fleet stop [names...]   |  fleet attach  |  fleet ls  |  fleet info
+#   fleet telegram setup|send|test  |  fleet detach
 
 # ── Project detection ────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -162,6 +163,45 @@ cmd_attach() {
 
 cmd_info() { echo "{\"repo\":\"${REPO_NAME}\",\"repo_root\":\"${REPO_ROOT}\",\"fleet_base\":\"${FLEET_BASE}\",\"bridge\":\"${BRIDGE_DIR}\",\"tmux_session\":\"${SESSION}\"}"; }
 
+# ── telegram ────────────────────────────────────────────────────────
+FLEET_CONFIG_DIR="${HOME}/.fleet"
+TELEGRAM_CONFIG="${FLEET_CONFIG_DIR}/telegram.json"
+
+telegram_setup() {
+  mkdir -p "$FLEET_CONFIG_DIR"
+  log "Telegram setup: Create a bot via @BotFather on Telegram and copy the token."
+  read -rp "Bot token: " bot_token
+  [ -z "$bot_token" ] && { err "Token cannot be empty."; exit 1; }
+  log "Now send any message to your bot in Telegram, then press Enter here."
+  read -r
+  local chat_id
+  chat_id=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates" | jq -r '.result[-1].message.chat.id // empty')
+  [ -z "$chat_id" ] && { err "Could not detect chat_id. Make sure you sent a message to the bot."; exit 1; }
+  echo "{\"bot_token\":\"${bot_token}\",\"chat_id\":\"${chat_id}\"}" > "$TELEGRAM_CONFIG"
+  curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
+    -d chat_id="$chat_id" -d text="Fleet connected!" -d parse_mode=Markdown > /dev/null
+  log "Telegram configured! Config saved to ${TELEGRAM_CONFIG}"
+}
+
+telegram_send() {
+  [ ! -f "$TELEGRAM_CONFIG" ] && { err "Telegram not configured. Run: fleet telegram setup"; exit 1; }
+  local token chat_id text="${1:-}"
+  token=$(jq -r '.bot_token' "$TELEGRAM_CONFIG")
+  chat_id=$(jq -r '.chat_id' "$TELEGRAM_CONFIG")
+  [ -z "$text" ] && { err "Usage: fleet telegram send \"message\""; exit 1; }
+  curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+    -d chat_id="$chat_id" -d text="$text" -d parse_mode=Markdown > /dev/null
+}
+
+cmd_telegram() {
+  case "${1:-}" in
+    setup) telegram_setup ;;
+    send)  shift; telegram_send "$*" ;;
+    test)  telegram_send "Fleet test message" && log "Test message sent!" ;;
+    *)     err "Usage: fleet telegram setup|send|test"; exit 1 ;;
+  esac
+}
+
 usage() { sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0; }
 
 case "${1:-}" in
@@ -170,6 +210,7 @@ case "${1:-}" in
   attach)  cmd_attach ;;
   ls)      cmd_ls ;;
   info)    cmd_info ;;
+  telegram) shift; cmd_telegram "$@" ;;
   -h|--help|help|"") usage ;;
   *)       err "Unknown command: $1"; usage ;;
 esac
