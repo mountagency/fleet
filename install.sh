@@ -46,6 +46,14 @@ elif command -v wget >/dev/null 2>&1; then
 fi
 log "Installed Claude Code skill to $SKILL_DIR/"
 
+# Install worker protocol
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "https://raw.githubusercontent.com/mountagency/fleet/main/skill/WORKER_PROTOCOL.md" -o "$SKILL_DIR/WORKER_PROTOCOL.md"
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO "$SKILL_DIR/WORKER_PROTOCOL.md" "https://raw.githubusercontent.com/mountagency/fleet/main/skill/WORKER_PROTOCOL.md"
+fi
+log "Installed worker protocol to $SKILL_DIR/"
+
 # Check PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$INSTALL_DIR"; then
   warn "$INSTALL_DIR is not in your PATH"
