@@ -108,12 +108,12 @@ poll_endpoint() {
 
     local label_str=""
     [[ "$labels" != "[]" ]] && label_str=" ($(echo "$labels" | jq -r 'join(", ")'))"
-    {
+    (flock -x 200
       echo ""
       echo "### New ${type%s} #${number} -- $(date -u +%Y-%m-%dT%H:%M:%SZ)"
       echo "- **Title:** ${title}"
       echo "- **Author:** @${author}${label_str}"
-    } >> "$BRIEFING_FILE"
+    ) >> "$BRIEFING_FILE" 200>"${BRIDGE_DIR}/.briefing.lock"
 
     local type_label="${type%s}"
     tg_send "🔔 New ${type_label} #${number}: ${title} (by @${author})"
