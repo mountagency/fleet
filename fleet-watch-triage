@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# fleet-watch-triage - Classify a GitHub event and decide what action to take.
+# Usage: fleet-watch-triage <event-json-file>
+# Exit codes: 0=act, 1=surface, 2=ignore
+
+EVENT_FILE="${1:?Usage: fleet-watch-triage <event-json-file>}"
+[ -f "$EVENT_FILE" ] || { echo "Event file not found: $EVENT_FILE" >&2; exit 3; }
+
+BRIDGE_DIR="${FLEET_BRIDGE_DIR:-$(dirname "$(dirname "$EVENT_FILE")")}"
+REPO_ROOT="${FLEET_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || dirname "$BRIDGE_DIR")}"
+WATCH_CONFIG="${REPO_ROOT}/.fleet/watch-config.yaml"
+
+# Parse event fields
+type=$(jq -r '.type // ""' "$EVENT_FILE")
+number=$(jq -r '.number // ""' "$EVENT_FILE")
+title=$(jq -r '.title // ""' "$EVENT_FILE")
+body=$(jq -r '.body // "" | .[0:500]' "$EVENT_FILE")
+author=$(jq -r '.author // ""' "$EVENT_FILE")
+labels=$(jq -r '(.labels // []) | join(",")' "$EVENT_FILE")
+branch=$(jq -r '.branch // ""' "$EVENT_FILE")
+default_branch=$(jq -r '.default_branch // "main"' "$EVENT_FILE")
+
+combined=$(printf '%s %s' "$title" "$body" | tr '[:upper:]' '[:lower:]')
+outfile="${EVENT_FILE%.json}-triage.json"
+
+write_decision() {
+  local priority="$1" category="$2" action="$3" action_type="$4" reasoning="$5"
+  jq -n \
+    --arg p "$priority" --arg c "$category" --arg a "$action" \
+    --arg at "$action_type" --arg r "$reasoning" \
+    '{priority:$p,category:$c,action:$a,action_type:$at,reasoning:$r}' > "$outfile"
+  case "$action" in
+    act)     exit 0 ;;
+    surface) exit 1 ;;
+    ignore)  exit 2 ;;
+  esac
+}
+
+# ── Tier 1: Rule-based classification ───────────────────────────────
+
+# CI failure on default branch → auto-investigate
+if [[ "$type" == "ci_failure" && "$branch" == "$default_branch" ]]; then
+  write_decision "p1" "bug" "act" "investigate" "CI failure on default branch"
+fi
+
+# PR from trusted author → auto-review
+if [[ "$type" == "pull_request" && -f "$WATCH_CONFIG" ]]; then
+  trusted=$(grep -A100 'trusted_authors:' "$WATCH_CONFIG" 2>/dev/null \
+    | grep '^ *- ' | sed 's/^ *- //' | tr '\n' '|' | sed 's/|$//')
+  if [[ -n "$trusted" && "$author" =~ ^($trusted)$ ]]; then
+    write_decision "p2" "maintenance" "act" "review" "PR from trusted author: $author"
+  fi
+fi
+
+# P0 keywords
+if echo "$combined" | grep -qiE 'security|vulnerability|crash|data.loss|production.down'; then
+  write_decision "p0" "security" "act" "investigate" "P0 keyword match in title/body"
+fi
+
+# P1 keywords
+if echo "$combined" | grep -qiE 'regression|breaking|blocker|urgent'; then
+  write_decision "p1" "bug" "surface" "notify" "P1 keyword match in title/body"
+fi
+
+# P2 keywords
+if echo "$combined" | grep -qiE '\bbug\b|\berror\b|\bfail'; then
+  write_decision "p2" "bug" "surface" "notify" "P2 keyword match in title/body"
+fi
+
+# ── Tier 2: AI triage ───────────────────────────────────────────────
+
+arch_context=""
+arch_file="${REPO_ROOT}/.fleet/knowledge/architecture.md"
+[ -f "$arch_file" ] && arch_context=$(head -c 500 "$arch_file")
+
+prompt=$(cat <<PROMPT
+You are a GitHub event triage agent.
+
+Event: ${type} #${number}
+Title: ${title}
+Body (first 500 chars): ${body}
+Author: ${author}
+Labels: ${labels}
+
+Project context:
+${arch_context}
+
+Classify this event. Respond with JSON only, no markdown fences:
+{"priority":"p0|p1|p2|p3","category":"bug|feature|question|maintenance|security","action":"act|surface|ignore","action_type":"review|investigate|fix|label|notify","reasoning":"one sentence"}
+PROMPT
+)
+
+ai_result=$(claude --print -p "$prompt" 2>/dev/null) || {
+  # AI unavailable -- default to surface
+  write_decision "p3" "maintenance" "surface" "notify" "AI triage unavailable, surfacing for human review"
+}
+
+# Validate and extract AI response
+if echo "$ai_result" | jq empty 2>/dev/null; then
+  echo "$ai_result" | jq '.' > "$outfile"
+  action=$(echo "$ai_result" | jq -r '.action // "surface"')
+  case "$action" in
+    act)     exit 0 ;;
+    surface) exit 1 ;;
+    ignore)  exit 2 ;;
+    *)       exit 1 ;;
+  esac
+else
+  # AI returned non-JSON -- surface for human review
+  write_decision "p3" "maintenance" "surface" "notify" "AI triage returned invalid JSON, surfacing for human review"
+fi
