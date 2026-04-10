@@ -293,8 +293,10 @@ reap_finished_workers() {
     now_epoch=$(date +%s)
     age=$(( now_epoch - updated_epoch ))
     [ "$age" -lt "$reap_after" ] && continue
-    # Worker has been done/failed for 5+ minutes -- clean up
-    "$FLEET_CMD" stop "$name" > /dev/null 2>&1 || true
+    # Worker has been done/failed for 5+ minutes -- clean up worktree only, keep branch
+    local worktree_dir="${FLEET_BASE}/${name}"
+    [ -d "$worktree_dir" ] && git -C "$(dirname "$FLEET_BASE")" worktree remove --force "$worktree_dir" 2>/dev/null || true
+    git -C "$(dirname "$FLEET_BASE")" worktree prune 2>/dev/null || true
     rm -f "$sf" "${BRIDGE_DIR}/log/${name}.jsonl" "${MTIME_DIR}/${name}"
     printf '{"ts":"%s","event":"reaped","worker":"%s","phase":"%s","age_seconds":%d}\n' \
       "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$name" "$phase" "$age" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
