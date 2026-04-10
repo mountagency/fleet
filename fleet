@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Usage:
 #   fleet spawn <name> [--from ref] [--prompt "..." | --prompt-file path]
-#   fleet stop [names...]   |  fleet attach  |  fleet ls  |  fleet info
-#   fleet telegram setup|send|test  |  fleet detach
+#   fleet stop [names...]   |  fleet attach  |  fleet detach  |  fleet ls
+#   fleet telegram setup|send|test  |  fleet info
 
 # ── Project detection ────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -155,8 +155,33 @@ cmd_ls() {
   echo "]"
 }
 
-# ── attach / info / main ────────────────────────────────────────────
+# ── detach / attach ──────────────────────────────────────────────────
+cmd_detach() {
+  [ ! -d "$BRIDGE_DIR" ] && { err "No active fleet. Spawn workers first."; exit 1; }
+  local watcher_path="${FLEET_INSTALL_DIR:-$HOME/.local/bin}/fleet-watcher"
+  [ ! -f "$watcher_path" ] && watcher_path="$(dirname "$0")/fleet-watcher"
+  [ ! -f "$watcher_path" ] && { err "fleet-watcher not found. Run install.sh."; exit 1; }
+  "$watcher_path" "$BRIDGE_DIR" &
+  local watcher_pid=$! now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "{\"mode\":\"detached\",\"detached_at\":\"${now}\",\"watcher_pid\":${watcher_pid}}" > "${BRIDGE_DIR}/state.json"
+  echo -e "# Fleet Briefing\n\nDetached at ${now}\n" > "${BRIDGE_DIR}/briefing.md"
+  log "Fleet detached. Watcher running (PID ${watcher_pid})."
+  [ -f "${FLEET_CONFIG_DIR:-$HOME/.fleet}/telegram.json" ] && log "Telegram notifications active." || warn "No Telegram configured. Run 'fleet telegram setup' for notifications."
+  log "Run 'fleet attach' to reattach with a briefing."
+}
+
 cmd_attach() {
+  if [ -f "${BRIDGE_DIR}/state.json" ] 2>/dev/null; then
+    local mode watcher_pid
+    mode=$(jq -r '.mode // empty' "${BRIDGE_DIR}/state.json" 2>/dev/null)
+    watcher_pid=$(jq -r '.watcher_pid // empty' "${BRIDGE_DIR}/state.json" 2>/dev/null)
+    if [ "$mode" = "detached" ] && [ -n "$watcher_pid" ]; then
+      kill "$watcher_pid" 2>/dev/null || true
+      echo "{\"mode\":\"live\",\"reattached_at\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"watcher_pid\":null}" > "${BRIDGE_DIR}/state.json"
+      log "Watcher stopped. Reattached."
+      [ -f "${BRIDGE_DIR}/briefing.md" ] && { echo ""; cat "${BRIDGE_DIR}/briefing.md"; echo ""; }
+    fi
+  fi
   if tmux has-session -t "$SESSION" 2>/dev/null; then tmux attach -t "$SESSION"
   else err "No fleet session. Spawn one first: fleet spawn <name>"; exit 1; fi
 }
@@ -205,12 +230,13 @@ cmd_telegram() {
 usage() { sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0; }
 
 case "${1:-}" in
-  spawn)   shift; cmd_spawn "$@" ;;
-  stop)    shift; cmd_stop "$@" ;;
-  attach)  cmd_attach ;;
-  ls)      cmd_ls ;;
-  info)    cmd_info ;;
+  spawn)    shift; cmd_spawn "$@" ;;
+  stop)     shift; cmd_stop "$@" ;;
+  attach)   cmd_attach ;;
+  detach)   cmd_detach ;;
+  ls)       cmd_ls ;;
+  info)     cmd_info ;;
   telegram) shift; cmd_telegram "$@" ;;
   -h|--help|help|"") usage ;;
-  *)       err "Unknown command: $1"; usage ;;
+  *)        err "Unknown command: $1"; usage ;;
 esac
