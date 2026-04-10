@@ -295,8 +295,36 @@ check_status_changes() {
 
 echo "{\"ts\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"event\":\"watcher_started\",\"detail\":\"Polling every ${POLL_INTERVAL}s\"}" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
 
+reap_finished_workers() {
+  local reap_after=300  # 5 minutes
+  for sf in "${BRIDGE_DIR}"/status/*.json; do
+    [ -f "$sf" ] || continue
+    local name phase updated_at
+    name=$(basename "$sf" .json)
+    phase=$(jq -r '.phase // "unknown"' "$sf" 2>/dev/null) || continue
+    [[ "$phase" != "done" && "$phase" != "failed" ]] && continue
+    updated_at=$(jq -r '.updated_at // empty' "$sf" 2>/dev/null) || continue
+    [ -z "$updated_at" ] && continue
+    local updated_epoch now_epoch age
+    if [[ "$(uname)" == "Darwin" ]]; then
+      updated_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$updated_at" +%s 2>/dev/null) || continue
+    else
+      updated_epoch=$(date -d "$updated_at" +%s 2>/dev/null) || continue
+    fi
+    now_epoch=$(date +%s)
+    age=$(( now_epoch - updated_epoch ))
+    [ "$age" -lt "$reap_after" ] && continue
+    # Worker has been done/failed for 5+ minutes -- clean up
+    "$FLEET_CMD" stop "$name" > /dev/null 2>&1 || true
+    rm -f "$sf" "${BRIDGE_DIR}/log/${name}.jsonl" "${MTIME_DIR}/${name}"
+    printf '{"ts":"%s","event":"reaped","worker":"%s","phase":"%s","age_seconds":%d}\n' \
+      "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$name" "$phase" "$age" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
+  done
+}
+
 while true; do
   check_status_changes
+  reap_finished_workers
   tg_poll
   sleep "$POLL_INTERVAL"
 done
