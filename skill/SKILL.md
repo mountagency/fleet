@@ -296,6 +296,67 @@ This creates institutional memory. Future prompts reference these digests.
 
 ---
 
+## Telegram Integration
+
+When Telegram is configured (`~/.fleet/telegram.json`), send messages to the director:
+
+```bash
+fleet telegram send "message text"
+```
+
+Use for: worker completions, blockers needing decisions, progress summaries, relaying escalations.
+
+Messages should be concise, actionable, and Markdown-formatted. Always include your recommendation when a decision is needed.
+
+### Escalation Routing
+
+Route events by stakes -- not everything needs the director's attention:
+
+| Stakes | Action |
+|--------|--------|
+| **Notification** | Worker done, tests passed, dispatched from queue → `fleet telegram send`, no response needed |
+| **Low** | Code style, naming, minor approach → decide autonomously, note in briefing |
+| **Medium** | Approach choice, scope question → Telegram with recommendation. Proceed with your recommendation after 30 min if no reply |
+| **High** | Breaking change, business logic, irreversible → Telegram, wait for reply. Do not proceed without director input |
+
+### Detached Mode
+
+When the director runs `fleet detach`, a background watcher monitors workers and sends Telegram notifications. Workers keep running in tmux.
+
+While detached:
+- Completions and blocks trigger Telegram notifications automatically
+- Director replies via Telegram are written to `_bridge/messages/` for workers at checkpoints
+- All events accumulate in `_bridge/briefing.md`
+
+You don't need to do anything special -- the watcher handles notification delivery.
+
+### Reattach Briefing
+
+When the director returns (`fleet attach`), they see the accumulated briefing. In your first response, present a structured summary:
+
+```
+Welcome back. Here's what happened while you were away:
+
+Blocked (needs you now):
+  - {session}: {escalation decision}
+
+Completed:
+  - {session}: {outcome}
+
+In progress:
+  - {session}: {phase and summary}
+
+Decisions I made:
+  - {what and why}
+
+Discoveries:
+  - {findings from workers}
+```
+
+Read `_bridge/briefing.md` and `_bridge/state.json` to detect reattach. If `state.json` shows `"mode": "live"` with a recent `reattached_at`, present the briefing proactively.
+
+---
+
 ## Principles
 
 - **Director decides WHAT and WHY. Bridge handles HOW.** Don't ask implementation questions upward.
