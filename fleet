@@ -2,26 +2,13 @@
 set -euo pipefail
 
 #
-# fleet - Parallel workstream orchestrator with comms protocol
+# fleet - Thin infrastructure for parallel Claude Code sessions
 #
 # Usage:
-#   fleet start 42 43 44                        # Worktrees for GH issues
-#   fleet start --open                          # All open GH issues
-#   fleet new "name" [--from ref] [--prompt ""] # Plain worktree
-#   fleet pr 123 [--prompt ""]                  # Work on existing PR
-#   fleet sitrep                                # Full status dashboard
-#   fleet dispatch                              # Start next queued items
-#   fleet queue                                 # Show the queue
-#   fleet review <session>                      # Cross-review a session's work
-#   fleet message <session> "text"              # Send message to a session
-#   fleet stop [names...]                       # Tear down worktrees (or all)
-#   fleet attach                                # Re-attach to tmux session
-#
-# Options:
-#   --max N          Max concurrent worktrees (default: 4)
-#   --no-install     Skip dependency installation
-#   --no-claude      Skip starting Claude Code sessions
-#   --priority N     Set priority (lower = higher priority, default: 10)
+#   fleet spawn <name> [--from ref] [--prompt "..." | --prompt-file path]
+#   fleet stop [names...]
+#   fleet attach
+#   fleet ls
 #
 
 # ── Project detection ────────────────────────────────────────────────
@@ -30,121 +17,35 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 REPO_NAME="$(basename "$REPO_ROOT")"
 FLEET_BASE="$(dirname "$REPO_ROOT")/${REPO_NAME}-fleet"
 BRIDGE_DIR="${FLEET_BASE}/_bridge"
-SESSION="fleet"
-MAX_PANES=4
-INSTALL_DEPS=true
-START_CLAUDE=true
+SESSION="fleet-${REPO_NAME}"
 
-# Auto-detect project type and set install command
+# Auto-detect install command
 detect_install_cmd() {
   local dir="$1"
-
   local cmds=()
-
-  # Ruby/Rails
-  if [ -f "$dir/Gemfile" ]; then
-    cmds+=("bundle install --quiet 2>/dev/null")
+  [ -f "$dir/Gemfile" ] && cmds+=("bundle install --quiet 2>/dev/null")
+  if [ -f "$dir/package-lock.json" ]; then cmds+=("npm install --silent 2>/dev/null")
+  elif [ -f "$dir/yarn.lock" ]; then cmds+=("yarn install --silent 2>/dev/null")
+  elif [ -f "$dir/pnpm-lock.yaml" ]; then cmds+=("pnpm install --silent 2>/dev/null")
+  elif [ -f "$dir/bun.lockb" ]; then cmds+=("bun install 2>/dev/null")
   fi
-
-  # Node/npm
-  if [ -f "$dir/package-lock.json" ]; then
-    cmds+=("npm install --silent 2>/dev/null")
-  elif [ -f "$dir/yarn.lock" ]; then
-    cmds+=("yarn install --silent 2>/dev/null")
-  elif [ -f "$dir/pnpm-lock.yaml" ]; then
-    cmds+=("pnpm install --silent 2>/dev/null")
-  elif [ -f "$dir/bun.lockb" ]; then
-    cmds+=("bun install 2>/dev/null")
-  fi
-
-  # Python
-  if [ -f "$dir/requirements.txt" ]; then
-    cmds+=("pip install -q -r requirements.txt 2>/dev/null")
-  elif [ -f "$dir/pyproject.toml" ]; then
-    if [ -f "$dir/uv.lock" ]; then
-      cmds+=("uv sync --quiet 2>/dev/null")
-    elif [ -f "$dir/poetry.lock" ]; then
-      cmds+=("poetry install --quiet 2>/dev/null")
-    else
-      cmds+=("pip install -q -e . 2>/dev/null")
+  [ -f "$dir/requirements.txt" ] && cmds+=("pip install -q -r requirements.txt 2>/dev/null")
+  if [ -f "$dir/pyproject.toml" ]; then
+    if [ -f "$dir/uv.lock" ]; then cmds+=("uv sync --quiet 2>/dev/null")
+    elif [ -f "$dir/poetry.lock" ]; then cmds+=("poetry install --quiet 2>/dev/null")
     fi
   fi
-
-  # Rust
-  if [ -f "$dir/Cargo.toml" ]; then
-    cmds+=("cargo build --quiet 2>/dev/null")
-  fi
-
-  # Go
-  if [ -f "$dir/go.mod" ]; then
-    cmds+=("go mod download 2>/dev/null")
-  fi
-
-  # Elixir
-  if [ -f "$dir/mix.exs" ]; then
-    cmds+=("mix deps.get --quiet 2>/dev/null")
-  fi
-
-  if [ ${#cmds[@]} -eq 0 ]; then
-    echo ""
-    return
-  fi
-
-  local IFS=" && "
-  echo "${cmds[*]}"
-}
-
-# Auto-detect CI/test command
-detect_ci_cmd() {
-  local dir="$1"
-
-  # Check for explicit CI script
-  if [ -x "$dir/bin/ci" ]; then
-    echo "bin/ci"
-    return
-  fi
-
-  # Check for Makefile targets
-  if [ -f "$dir/Makefile" ]; then
-    if grep -q "^ci:" "$dir/Makefile" 2>/dev/null; then
-      echo "make ci"
-      return
-    fi
-    if grep -q "^test:" "$dir/Makefile" 2>/dev/null; then
-      echo "make test"
-      return
-    fi
-  fi
-
-  # Language-specific
-  if [ -f "$dir/Gemfile" ]; then
-    echo "bundle exec rake test 2>/dev/null || bundle exec rspec"
-  elif [ -f "$dir/package.json" ]; then
-    if grep -q '"test"' "$dir/package.json" 2>/dev/null; then
-      echo "npm test"
-    elif grep -q '"check"' "$dir/package.json" 2>/dev/null; then
-      echo "npm run check"
-    fi
-  elif [ -f "$dir/Cargo.toml" ]; then
-    echo "cargo test"
-  elif [ -f "$dir/go.mod" ]; then
-    echo "go test ./..."
-  elif [ -f "$dir/pyproject.toml" ] || [ -f "$dir/setup.py" ]; then
-    echo "pytest"
-  elif [ -f "$dir/mix.exs" ]; then
-    echo "mix test"
-  else
-    echo ""
-  fi
+  [ -f "$dir/Cargo.toml" ] && cmds+=("cargo build --quiet 2>/dev/null")
+  [ -f "$dir/go.mod" ] && cmds+=("go mod download 2>/dev/null")
+  [ -f "$dir/mix.exs" ] && cmds+=("mix deps.get --quiet 2>/dev/null")
+  [ ${#cmds[@]} -eq 0 ] && return
+  local IFS=" && "; echo "${cmds[*]}"
 }
 
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
+RED='\033[0;31m'
 DIM='\033[2m'
 NC='\033[0m'
 
@@ -152,281 +53,105 @@ log()  { echo -e "${GREEN}[fleet]${NC} $*"; }
 warn() { echo -e "${YELLOW}[fleet]${NC} $*"; }
 err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 
-usage() {
-  sed -n '3,17p' "$0" | sed 's/^# \?//'
-  exit 0
-}
-
-# ── Bridge directory setup ───────────────────────────────────────────
+# ── Bridge setup ─────────────────────────────────────────────────────
 
 init_bridge() {
-  mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,reviews}
-  if [ ! -f "$BRIDGE_DIR/queue.json" ]; then
-    echo '{"max_concurrent":4,"auto_review":true,"items":[]}' > "$BRIDGE_DIR/queue.json"
-  fi
+  mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries}
 }
 
-# ── Worker system prompt ─────────────────────────────────────────────
+# ── Worker protocol ──────────────────────────────────────────────────
 
-generate_worker_prompt() {
+worker_protocol() {
   local session_name="$1"
-  local task_prompt="$2"
-  local ci_cmd
-  ci_cmd=$(detect_ci_cmd "$REPO_ROOT")
-
-  local ci_instruction=""
-  if [ -n "$ci_cmd" ]; then
-    ci_instruction="Run \`${ci_cmd}\` before marking done."
-  else
-    ci_instruction="No CI command detected. Run whatever tests exist before marking done."
-  fi
-
-  cat <<WORKER_PROMPT
-${task_prompt}
+  cat <<'PROTOCOL'
 
 ---
 
 ## Fleet Worker Protocol
 
-You are fleet worker session: **${session_name}**
-Project: ${REPO_NAME} (${REPO_ROOT})
-Bridge directory: ${BRIDGE_DIR}
-
-You are an autonomous worker in a fleet of parallel Claude Code sessions. A human director oversees the fleet from a bridge session. Follow this protocol precisely.
+You are an autonomous worker in a fleet of parallel Claude Code sessions. A human director oversees the fleet from a bridge session. Follow this protocol.
 
 ### Status Updates
-Write to \`${BRIDGE_DIR}/status/${session_name}.json\` after every phase change.
-Use the Write tool. The file must always contain valid JSON:
+Write to `BRIDGE_DIR/status/SESSION_NAME.json` after every phase change:
 
-\`\`\`json
+```json
 {
-  "session": "${session_name}",
+  "session": "SESSION_NAME",
   "phase": "analyzing",
   "summary": "Brief description of current activity",
   "files_changed": [],
   "needs_human": false,
   "blocked_reason": null,
   "ci_status": null,
-  "commits": [],
   "updated_at": "ISO-8601 timestamp"
 }
-\`\`\`
+```
 
-Valid phases: \`analyzing\`, \`implementing\`, \`testing\`, \`blocked\`, \`done\`, \`failed\`
+Phases: `analyzing`, `implementing`, `testing`, `blocked`, `done`, `failed`
 
 ### Event Log
-Append to \`${BRIDGE_DIR}/log/${session_name}.jsonl\` after significant events.
-Each line is one JSON object. Use the Bash tool: \`echo '{"ts":"...","event":"...","detail":"..."}' >> ${BRIDGE_DIR}/log/${session_name}.jsonl\`
-
-Event types: \`started\`, \`analyzing\`, \`discovery\`, \`implementing\`, \`testing\`, \`blocked\`, \`ci_pass\`, \`ci_fail\`, \`done\`, \`failed\`
+Append to `BRIDGE_DIR/log/SESSION_NAME.jsonl`:
+```bash
+echo '{"ts":"...","event":"...","detail":"..."}' >> BRIDGE_DIR/log/SESSION_NAME.jsonl
+```
 
 ### Discoveries
-When you learn something non-obvious about the codebase that other sessions might benefit from, write it to \`${BRIDGE_DIR}/discoveries/{topic-slug}.md\`. Keep it factual and concise.
-
-Good: "PaymentService.charge also triggers a webhook to the billing system"
-Bad: "I read the payment model" (obvious, not useful)
+Write non-obvious findings to `BRIDGE_DIR/discoveries/{topic-slug}.md`. Other sessions benefit from these.
 
 ### Messages
-Before starting implementation and before any major decision, check: \`${BRIDGE_DIR}/messages/${session_name}.md\`
-The director may have sent you instructions or clarifications. If the file exists, read it and follow the guidance.
-
-### Work Protocol
-
-1. Write \`started\` status + log entry immediately
-2. Analyze the task - read relevant code, understand the domain
-3. Check for messages from the director
-4. Write \`analyzing\` status with your plan
-5. Implement the solution - write \`implementing\` status
-6. Log any discoveries along the way
-7. ${ci_instruction} Write \`testing\` status, then update with ci_status
-8. If tests pass: commit your work, write \`done\` status with full summary and list of commits
-9. If tests fail: fix and retry. If stuck, write \`failed\` status
-10. If genuinely blocked (missing info, ambiguous requirements): write \`blocked\` status with \`needs_human: true\` and clear \`blocked_reason\`
+Check `BRIDGE_DIR/messages/SESSION_NAME.md` before starting implementation and before major decisions. The director may have sent instructions.
 
 ### Rules
-
-- **Be autonomous.** Make decisions and implement. Only set \`needs_human\` when you genuinely cannot proceed without human input.
-- **Keep status current.** The director checks your status to know what's happening across the fleet.
-- **Write discoveries generously.** Other sessions working on related code benefit from your findings.
-- **Check messages before major decisions.** The director may have context you don't have.
-- **Always run tests before marking done.** No exceptions.
-- **Commit with descriptive messages.** Your commits will become a PR.
-- **Read CLAUDE.md** if it exists in the project root for project-specific conventions.
-WORKER_PROMPT
+- Write `started` status immediately
+- Be autonomous. Only set `needs_human: true` when genuinely blocked
+- Keep status current. The director checks it to know what's happening
+- Run tests before marking `done`
+- Commit with descriptive messages
+- Read CLAUDE.md for project conventions if it exists
+- You have full access to all Claude Code tools. Use `gh` for GitHub operations, web search for research, MCP servers if available. Use whatever tools best accomplish your task.
+PROTOCOL
 }
 
-# ── Fetch helpers ────────────────────────────────────────────────────
-
-fetch_issue() {
-  gh issue view "$1" --json number,title,body,labels,assignees 2>/dev/null
-}
-
-fetch_pr() {
-  gh pr view "$1" --json number,title,body,headRefName,labels,reviews 2>/dev/null
-}
-
-# ── tmux helpers ─────────────────────────────────────────────────────
-
-ensure_session() {
-  local dir="$1"
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux split-pane -t "$SESSION" -c "$dir"
-    tmux select-layout -t "$SESSION" tiled
-  else
-    tmux new-session -d -s "$SESSION" -c "$dir" -x "$(tput cols)" -y "$(tput lines)"
-    tmux set-option -t "$SESSION" remain-on-exit off
-  fi
-}
-
-start_pane() {
+generate_worker_prompt() {
   local session_name="$1"
-  local prompt_file="$2"
+  local task_prompt="$2"
 
-  local install_cmd=""
-  if $INSTALL_DEPS; then
-    install_cmd=$(detect_install_cmd "$REPO_ROOT")
-    if [ -n "$install_cmd" ]; then
-      install_cmd="${install_cmd} && "
-    fi
-  fi
+  local protocol
+  protocol=$(worker_protocol "$session_name")
+  protocol="${protocol//BRIDGE_DIR/$BRIDGE_DIR}"
+  protocol="${protocol//SESSION_NAME/$session_name}"
 
-  if $START_CLAUDE && [ -n "$prompt_file" ]; then
-    local system_prompt_file="${BRIDGE_DIR}/worker-prompts/${session_name}.md"
-    mkdir -p "${BRIDGE_DIR}/worker-prompts"
-    cp "$prompt_file" "$system_prompt_file"
-
-    tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${system_prompt_file}')\" --permission-mode acceptEdits" Enter
-  elif $START_CLAUDE; then
-    tmux send-keys -t "$SESSION" "${install_cmd}claude --permission-mode acceptEdits" Enter
-  else
-    tmux send-keys -t "$SESSION" "echo 'Worktree ready.'" Enter
-  fi
+  printf '%s\n%s' "$task_prompt" "$protocol"
 }
 
-# ── Queue management ─────────────────────────────────────────────────
+# ── spawn ────────────────────────────────────────────────────────────
 
-queue_add() {
-  local id="$1" type="$2" title="$3" priority="${4:-10}" prompt="${5:-}"
-  local number="${6:-null}"
-
-  local queue_file="$BRIDGE_DIR/queue.json"
-
-  local item
-  if [ "$number" != "null" ]; then
-    item=$(jq -n \
-      --arg id "$id" --arg type "$type" --arg title "$title" \
-      --argjson priority "$priority" --arg prompt "$prompt" \
-      --argjson number "$number" --arg status "queued" \
-      '{id:$id,type:$type,number:$number,title:$title,priority:$priority,prompt:$prompt,status:$status}')
-  else
-    item=$(jq -n \
-      --arg id "$id" --arg type "$type" --arg title "$title" \
-      --argjson priority "$priority" --arg prompt "$prompt" \
-      --arg status "queued" \
-      '{id:$id,type:$type,title:$title,priority:$priority,prompt:$prompt,status:$status}')
-  fi
-
-  jq --argjson item "$item" '.items += [$item] | .items |= sort_by(.priority)' "$queue_file" > "${queue_file}.tmp"
-  mv "${queue_file}.tmp" "$queue_file"
-}
-
-queue_update_status() {
-  local id="$1" status="$2"
-  local queue_file="$BRIDGE_DIR/queue.json"
-  jq --arg id "$id" --arg status "$status" \
-    '(.items[] | select(.id == $id)).status = $status' "$queue_file" > "${queue_file}.tmp"
-  mv "${queue_file}.tmp" "$queue_file"
-}
-
-count_running() {
-  if [ ! -f "$BRIDGE_DIR/queue.json" ]; then
-    echo 0
-    return
-  fi
-  jq '[.items[] | select(.status == "running")] | length' "$BRIDGE_DIR/queue.json"
-}
-
-get_max_concurrent() {
-  if [ ! -f "$BRIDGE_DIR/queue.json" ]; then
-    echo "$MAX_PANES"
-    return
-  fi
-  jq '.max_concurrent // 4' "$BRIDGE_DIR/queue.json"
-}
-
-# ── Launch a session (core function used by all commands) ────────────
-
-launch_session() {
-  local session_name="$1"
-  local worktree_dir="$2"
-  local task_prompt="$3"
-
-  local full_prompt
-  full_prompt=$(generate_worker_prompt "$session_name" "$task_prompt")
-
-  local prompt_file="${worktree_dir}/.fleet-prompt"
-  echo "$full_prompt" > "$prompt_file"
-
-  local now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  cat > "$BRIDGE_DIR/status/${session_name}.json" <<EOF
-{
-  "session": "${session_name}",
-  "phase": "starting",
-  "summary": "Session initializing",
-  "files_changed": [],
-  "needs_human": false,
-  "blocked_reason": null,
-  "ci_status": null,
-  "commits": [],
-  "started_at": "${now}",
-  "updated_at": "${now}"
-}
-EOF
-
-  echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${session_name}.jsonl"
-
-  ensure_session "$worktree_dir"
-  start_pane "$session_name" "$prompt_file"
-}
-
-# ── create_worktree helper ───────────────────────────────────────────
-
-create_worktree() {
-  local worktree_dir="$1"
-  local branch="$2"
-  local from_ref="${3:-main}"
-
-  mkdir -p "$FLEET_BASE"
-
-  if [ -d "$worktree_dir" ]; then
-    warn "Worktree already exists at ${worktree_dir}, reusing"
-  elif git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
-    git -C "$REPO_ROOT" worktree add "$worktree_dir" "$branch"
-  else
-    git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "$from_ref"
-  fi
-}
-
-# ── Commands ─────────────────────────────────────────────────────────
-
-cmd_new() {
-  local name="" from_ref="main" prompt="" priority=10
+cmd_spawn() {
+  local name="" from_ref="main" prompt="" prompt_file="" no_install=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --from)       from_ref="$2"; shift 2 ;;
-      --no-install) INSTALL_DEPS=false; shift ;;
-      --no-claude)  START_CLAUDE=false; shift ;;
-      --prompt)     prompt="$2"; shift 2 ;;
-      --priority)   priority="$2"; shift 2 ;;
-      -h|--help)    usage ;;
-      *)            name="$1"; shift ;;
+      --from)         from_ref="$2"; shift 2 ;;
+      --prompt)       prompt="$2"; shift 2 ;;
+      --prompt-file)  prompt_file="$2"; shift 2 ;;
+      --no-install)   no_install=true; shift ;;
+      -h|--help)      usage ;;
+      *)              name="$1"; shift ;;
     esac
   done
 
   if [ -z "$name" ]; then
-    err "Usage: fleet new <name> [--from <ref>] [--prompt \"...\"]"
+    err "Usage: fleet spawn <name> [--from <ref>] [--prompt \"...\"]"
     exit 1
+  fi
+
+  # Read prompt from file if provided
+  if [ -n "$prompt_file" ] && [ -f "$prompt_file" ]; then
+    prompt=$(cat "$prompt_file")
+  fi
+
+  if [ -z "$prompt" ]; then
+    prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
   fi
 
   init_bridge
@@ -434,514 +159,62 @@ cmd_new() {
   local worktree_dir="${FLEET_BASE}/${name}"
   local branch="fleet/${name}"
 
-  create_worktree "$worktree_dir" "$branch" "$from_ref"
-
-  local task_prompt="${prompt:-You are working on: ${name}. Read CLAUDE.md for project conventions if it exists.}"
-
-  queue_add "$name" "custom" "$name" "$priority" "$task_prompt"
-  queue_update_status "$name" "running"
-
-  launch_session "$name" "$worktree_dir" "$task_prompt"
-
-  tmux select-layout -t "$SESSION" tiled
-  log "Launched: ${name} (branch: ${branch})"
-  log "Attach with: fleet attach"
-}
-
-cmd_pr() {
-  local pr_number="" prompt=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --no-install) INSTALL_DEPS=false; shift ;;
-      --no-claude)  START_CLAUDE=false; shift ;;
-      --prompt)     prompt="$2"; shift 2 ;;
-      -h|--help)    usage ;;
-      *)            pr_number="$1"; shift ;;
-    esac
-  done
-
-  if [ -z "$pr_number" ]; then
-    err "Usage: fleet pr <number> [--prompt \"...\"]"
-    exit 1
-  fi
-
-  init_bridge
-
-  local pr_json
-  pr_json=$(fetch_pr "$pr_number") || { err "Could not fetch PR #${pr_number}"; exit 1; }
-
-  local title=$(echo "$pr_json" | jq -r '.title')
-  local body=$(echo "$pr_json" | jq -r '.body // "No description"')
-  local branch=$(echo "$pr_json" | jq -r '.headRefName')
-  local labels=$(echo "$pr_json" | jq -r '[.labels[].name] | join(", ") // "none"')
-  local reviews=$(echo "$pr_json" | jq -r '[.reviews[] | select(.body != "") | "**\(.author.login)** (\(.state)):\n\(.body)"] | join("\n\n") // "None"')
-
-  local session_name="pr-${pr_number}"
-  local worktree_dir="${FLEET_BASE}/${session_name}"
-
-  git -C "$REPO_ROOT" fetch origin "$branch" 2>/dev/null || true
-
+  # Create worktree
+  mkdir -p "$FLEET_BASE"
   if [ -d "$worktree_dir" ]; then
-    warn "Worktree already exists, reusing"
+    warn "Worktree exists, reusing"
   elif git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
     git -C "$REPO_ROOT" worktree add "$worktree_dir" "$branch"
   else
-    git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "origin/${branch}"
+    git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "$from_ref"
   fi
 
-  local task_prompt="You are working on an existing pull request.
-
-**PR #${pr_number}: ${title}**
-
-${body}
-
-Labels: ${labels}
-
-## Review comments
-${reviews}
-
-Read CLAUDE.md for project conventions if it exists."
-
-  if [ -n "$prompt" ]; then
-    task_prompt="${task_prompt}
-
-## Additional instructions
-${prompt}"
-  fi
-
-  queue_add "$session_name" "pr" "$title" 5 "$task_prompt" "$pr_number"
-  queue_update_status "$session_name" "running"
-
-  launch_session "$session_name" "$worktree_dir" "$task_prompt"
-
-  tmux select-layout -t "$SESSION" tiled
-  log "Launched: PR #${pr_number} - ${title}"
-  log "Attach with: fleet attach"
-}
-
-cmd_start() {
-  local issues=() priority=10
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --max)        MAX_PANES="$2"; shift 2 ;;
-      --no-install) INSTALL_DEPS=false; shift ;;
-      --no-claude)  START_CLAUDE=false; shift ;;
-      --priority)   priority="$2"; shift 2 ;;
-      --open)
-        log "Fetching open issues..."
-        while IFS= read -r num; do
-          issues+=("$num")
-        done < <(gh issue list --state open --limit 50 --json number -q '.[].number')
-        shift
-        ;;
-      -h|--help)   usage ;;
-      *)           issues+=("$1"); shift ;;
-    esac
-  done
-
-  if [ ${#issues[@]} -eq 0 ]; then
-    err "No issues specified. Use issue numbers or --open"
-    usage
-  fi
-
-  init_bridge
-
-  jq --argjson max "$MAX_PANES" '.max_concurrent = $max' "$BRIDGE_DIR/queue.json" > "$BRIDGE_DIR/queue.json.tmp"
-  mv "$BRIDGE_DIR/queue.json.tmp" "$BRIDGE_DIR/queue.json"
-
-  log "Queuing ${#issues[@]} issues..."
-
-  for issue_num in "${issues[@]}"; do
-    local session_name="issue-${issue_num}"
-
-    local issue_json
-    issue_json=$(fetch_issue "$issue_num") || {
-      err "Could not fetch issue #${issue_num}, skipping"
-      continue
-    }
-
-    local title=$(echo "$issue_json" | jq -r '.title')
-    local body=$(echo "$issue_json" | jq -r '.body // "No description"')
-    local labels=$(echo "$issue_json" | jq -r '[.labels[].name] | join(", ") // "none"')
-
-    local task_prompt="You are working on GitHub issue #${issue_num}.
-
-**${title}**
-
-${body}
-
-Labels: ${labels}
-
-Read CLAUDE.md for project conventions if it exists.
-Please analyze this issue and implement a solution. Run tests before you're done to verify everything passes."
-
-    queue_add "$session_name" "issue" "$title" "$priority" "$task_prompt" "$issue_num"
-    log "  Queued #${issue_num}: ${title}"
-  done
-
-  cmd_dispatch
-
-  log ""
-  log "Attach with: fleet attach"
-}
-
-cmd_dispatch() {
-  init_bridge
-
-  local max
-  max=$(get_max_concurrent)
-  local running
-  running=$(count_running)
-  local available=$((max - running))
-
-  if [ "$available" -le 0 ]; then
-    log "All ${max} slots occupied. Nothing to dispatch."
-    return
-  fi
-
-  if [ -d "$BRIDGE_DIR/status" ]; then
-    for status_file in "$BRIDGE_DIR/status"/*.json; do
-      [ -f "$status_file" ] || continue
-      local sname=$(jq -r '.session' "$status_file" 2>/dev/null) || continue
-      local phase=$(jq -r '.phase' "$status_file" 2>/dev/null) || continue
-      if [ "$phase" = "done" ] || [ "$phase" = "failed" ]; then
-        local queue_status
-        queue_status=$(jq -r --arg id "$sname" '.items[] | select(.id == $id) | .status' "$BRIDGE_DIR/queue.json" 2>/dev/null)
-        if [ "$queue_status" = "running" ]; then
-          queue_update_status "$sname" "$phase"
-          available=$((available + 1))
-        fi
-      fi
-    done
-  fi
-
-  local queued_items
-  queued_items=$(jq -r '[.items[] | select(.status == "queued")] | .[0:'"$available"'] | .[].id' "$BRIDGE_DIR/queue.json" 2>/dev/null)
-
-  if [ -z "$queued_items" ]; then
-    log "Queue empty. Nothing to dispatch."
-    return
-  fi
-
-  local dispatched=0
-  while IFS= read -r item_id; do
-    [ -z "$item_id" ] && continue
-
-    local item_json
-    item_json=$(jq --arg id "$item_id" '.items[] | select(.id == $id)' "$BRIDGE_DIR/queue.json")
-
-    local item_type=$(echo "$item_json" | jq -r '.type')
-    local item_prompt=$(echo "$item_json" | jq -r '.prompt')
-    local item_title=$(echo "$item_json" | jq -r '.title')
-
-    local worktree_dir="${FLEET_BASE}/${item_id}"
-    local branch="fleet/${item_id}"
-
-    if [ "$item_type" = "pr" ]; then
-      local pr_branch
-      pr_branch=$(echo "$item_json" | jq -r '.branch // empty')
-      if [ -n "$pr_branch" ]; then
-        git -C "$REPO_ROOT" fetch origin "$pr_branch" 2>/dev/null || true
-        create_worktree "$worktree_dir" "$pr_branch" "origin/${pr_branch}"
-      else
-        create_worktree "$worktree_dir" "$branch" "main"
-      fi
-    else
-      create_worktree "$worktree_dir" "$branch" "main"
-    fi
-
-    queue_update_status "$item_id" "running"
-    launch_session "$item_id" "$worktree_dir" "$item_prompt"
-
-    log "  Dispatched: ${item_id} — ${item_title}"
-    dispatched=$((dispatched + 1))
-  done <<< "$queued_items"
-
-  tmux select-layout -t "$SESSION" tiled
-  log "Dispatched ${dispatched} sessions. $(count_running)/$(get_max_concurrent) slots active."
-}
-
-cmd_sitrep() {
-  init_bridge
-
-  local today=$(date +"%Y-%m-%d")
-
-  echo ""
-  echo -e "${BOLD}FLEET SITREP${NC} — ${REPO_NAME} — ${today} $(date +"%H:%M")"
-  echo ""
-
-  local has_active=false
-  local has_blocked=false
-  local has_done=false
-
-  if [ -d "$BRIDGE_DIR/status" ]; then
-    # Blocked first
-    for status_file in "$BRIDGE_DIR/status"/*.json; do
-      [ -f "$status_file" ] || continue
-      local phase=$(jq -r '.phase' "$status_file" 2>/dev/null) || continue
-      if [ "$phase" = "blocked" ]; then
-        if ! $has_blocked; then
-          echo -e "${RED}${BOLD}BLOCKED:${NC}"
-          has_blocked=true
-        fi
-        local sname=$(jq -r '.session' "$status_file")
-        local summary=$(jq -r '.summary' "$status_file")
-        local reason=$(jq -r '.blocked_reason // "No reason given"' "$status_file")
-        echo -e "  ${RED}⏸${NC}  ${BOLD}${sname}${NC}  ${summary}"
-        echo -e "     ${DIM}Reason: ${reason}${NC}"
-      fi
-    done
-    if $has_blocked; then echo ""; fi
-
-    # Active
-    for status_file in "$BRIDGE_DIR/status"/*.json; do
-      [ -f "$status_file" ] || continue
-      local phase=$(jq -r '.phase' "$status_file" 2>/dev/null) || continue
-      if [ "$phase" = "analyzing" ] || [ "$phase" = "implementing" ] || [ "$phase" = "testing" ] || [ "$phase" = "starting" ]; then
-        if ! $has_active; then
-          echo -e "${GREEN}${BOLD}ACTIVE ($(count_running)/$(get_max_concurrent) slots):${NC}"
-          has_active=true
-        fi
-        local sname=$(jq -r '.session' "$status_file")
-        local summary=$(jq -r '.summary' "$status_file")
-        local started=$(jq -r '.started_at // .updated_at' "$status_file")
-
-        local icon="●"
-        [ "$phase" = "testing" ] && icon="◉"
-
-        local elapsed=""
-        if command -v gdate &>/dev/null; then
-          local start_epoch=$(gdate -d "$started" +%s 2>/dev/null || echo 0)
-          local now_epoch=$(gdate -u +%s)
-          if [ "$start_epoch" -gt 0 ]; then
-            local mins=$(( (now_epoch - start_epoch) / 60 ))
-            if [ "$mins" -ge 60 ]; then
-              elapsed="$((mins / 60))hr $((mins % 60))min"
-            else
-              elapsed="${mins}min"
-            fi
-          fi
-        fi
-
-        printf "  ${GREEN}%s${NC}  ${BOLD}%-20s${NC} %-12s %s ${DIM}%s${NC}\n" "$icon" "$sname" "$phase" "$summary" "$elapsed"
-      fi
-    done
-    if $has_active; then echo ""; fi
-
-    # Completed
-    for status_file in "$BRIDGE_DIR/status"/*.json; do
-      [ -f "$status_file" ] || continue
-      local phase=$(jq -r '.phase' "$status_file" 2>/dev/null) || continue
-      if [ "$phase" = "done" ]; then
-        if ! $has_done; then
-          echo -e "${CYAN}${BOLD}COMPLETED:${NC}"
-          has_done=true
-        fi
-        local sname=$(jq -r '.session' "$status_file")
-        local summary=$(jq -r '.summary' "$status_file")
-        local ci=$(jq -r '.ci_status // "—"' "$status_file")
-        echo -e "  ${GREEN}✓${NC}  ${BOLD}${sname}${NC}  ${summary}  ${DIM}CI: ${ci}${NC}"
-      fi
-    done
-    if $has_done; then echo ""; fi
-
-    # Failed
-    for status_file in "$BRIDGE_DIR/status"/*.json; do
-      [ -f "$status_file" ] || continue
-      local phase=$(jq -r '.phase' "$status_file" 2>/dev/null) || continue
-      if [ "$phase" = "failed" ]; then
-        local sname=$(jq -r '.session' "$status_file")
-        local summary=$(jq -r '.summary' "$status_file")
-        echo -e "  ${RED}✗${NC}  ${BOLD}${sname}${NC}  ${summary}"
-      fi
-    done
-  fi
-
-  # Queue
-  if [ -f "$BRIDGE_DIR/queue.json" ]; then
-    local queued_count=$(jq '[.items[] | select(.status == "queued")] | length' "$BRIDGE_DIR/queue.json")
-    if [ "$queued_count" -gt 0 ]; then
-      echo -e "${YELLOW}${BOLD}QUEUED (${queued_count}):${NC}"
-      jq -r '.items[] | select(.status == "queued") | "  \(.priority). \(.id)  \(.title)"' "$BRIDGE_DIR/queue.json"
-      echo ""
-    fi
-  fi
-
-  # Discoveries
-  if [ -d "$BRIDGE_DIR/discoveries" ]; then
-    local disc_count=0
-    for disc in "$BRIDGE_DIR/discoveries"/*.md; do
-      [ -f "$disc" ] || continue
-      disc_count=$((disc_count + 1))
-    done
-    if [ "$disc_count" -gt 0 ]; then
-      echo -e "${BLUE}${BOLD}DISCOVERIES (${disc_count}):${NC}"
-      for disc in "$BRIDGE_DIR/discoveries"/*.md; do
-        [ -f "$disc" ] || continue
-        local topic=$(basename "$disc" .md)
-        local first_line=$(head -1 "$disc")
-        echo -e "  ${DIM}•${NC} ${BOLD}${topic}:${NC} ${first_line}"
-      done
-      echo ""
-    fi
-  fi
-
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    local pane_count
-    pane_count=$(tmux list-panes -t "$SESSION" 2>/dev/null | wc -l | tr -d ' ')
-    echo -e "${DIM}tmux '${SESSION}' active (${pane_count} panes) — fleet attach${NC}"
-  else
-    echo -e "${DIM}No tmux session active${NC}"
-  fi
-}
-
-cmd_queue() {
-  init_bridge
-
-  if [ ! -f "$BRIDGE_DIR/queue.json" ]; then
-    warn "No queue found."
-    return
-  fi
-
-  echo ""
-  echo -e "${BOLD}FLEET QUEUE${NC} — ${REPO_NAME}"
-  echo ""
-
-  local max=$(get_max_concurrent)
-  local running=$(count_running)
-  echo -e "Slots: ${running}/${max} active"
-  echo ""
-
-  jq -r '.items[] | "\(.status)\t\(.priority)\t\(.id)\t\(.title)"' "$BRIDGE_DIR/queue.json" | \
-    while IFS=$'\t' read -r status priority id title; do
-      local icon="○"
-      case "$status" in
-        running)   icon="${GREEN}●${NC}" ;;
-        queued)    icon="${YELLOW}○${NC}" ;;
-        done)      icon="${GREEN}✓${NC}" ;;
-        failed)    icon="${RED}✗${NC}" ;;
-      esac
-      printf "  %b  %-8s P%-2s  ${BOLD}%-20s${NC}  %s\n" "$icon" "$status" "$priority" "$id" "$title"
-    done
-  echo ""
-}
-
-cmd_review() {
-  local session_name="$1"
-
-  if [ -z "$session_name" ]; then
-    err "Usage: fleet review <session-name>"
-    exit 1
-  fi
-
-  init_bridge
-
-  local worktree_dir="${FLEET_BASE}/${session_name}"
-  if [ ! -d "$worktree_dir" ]; then
-    err "No worktree found for '${session_name}'"
-    exit 1
-  fi
-
-  local branch
-  branch=$(git -C "$worktree_dir" branch --show-current 2>/dev/null)
-
-  log "Starting cross-review of ${session_name} (branch: ${branch})..."
-
-  local diff
-  diff=$(git -C "$worktree_dir" diff main...HEAD 2>/dev/null || echo "No diff available")
-
-  local review_prompt="You are a code reviewer. Review the following diff from the '${session_name}' session.
-
-Branch: ${branch}
-Project: ${REPO_NAME}
-
-Read CLAUDE.md for project conventions if it exists.
-
-Focus on:
-1. Correctness - does the code do what it should?
-2. Conventions - does it follow project patterns?
-3. Edge cases - are there unhandled scenarios?
-4. Security - any vulnerabilities introduced?
-5. Tests - are changes properly tested?
-
-Be concise. List issues as actionable items.
-
-## Diff
-
-\`\`\`diff
-${diff}
-\`\`\`"
-
-  local review_output
-  review_output=$(cd "$worktree_dir" && claude -p "$review_prompt" 2>/dev/null) || {
-    err "Review failed"
-    exit 1
-  }
-
-  local review_file="${BRIDGE_DIR}/reviews/${session_name}.md"
-  cat > "$review_file" <<EOF
-# Review: ${session_name}
-**Branch:** ${branch}
-**Reviewed:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-${review_output}
-EOF
-
-  log "Review saved to: ${review_file}"
-
-  cat > "${BRIDGE_DIR}/messages/${session_name}.md" <<EOF
-## Code Review Feedback
-
-The following review was generated for your work. Please address the issues found:
-
-${review_output}
-EOF
-
-  log "Review feedback sent as message to ${session_name}"
-
-  echo ""
-  echo -e "${BOLD}REVIEW: ${session_name}${NC}"
-  echo ""
-  echo "$review_output"
-}
-
-cmd_message() {
-  local session_name="$1"
-  shift
-  local message="$*"
-
-  if [ -z "$session_name" ] || [ -z "$message" ]; then
-    err "Usage: fleet message <session-name> \"message text\""
-    exit 1
-  fi
-
-  init_bridge
-
-  local msg_file="${BRIDGE_DIR}/messages/${session_name}.md"
+  # Generate full prompt (task + protocol)
+  local full_prompt
+  full_prompt=$(generate_worker_prompt "$name" "$prompt")
+
+  local system_prompt_file="${BRIDGE_DIR}/worker-prompts/${name}.md"
+  mkdir -p "${BRIDGE_DIR}/worker-prompts"
+  echo "$full_prompt" > "$system_prompt_file"
+
+  # Initialize status
   local now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$BRIDGE_DIR/status/${name}.json" <<EOF
+{"session":"${name}","phase":"starting","summary":"Session initializing","files_changed":[],"needs_human":false,"blocked_reason":null,"ci_status":null,"started_at":"${now}","updated_at":"${now}"}
+EOF
+  echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${name}.jsonl"
 
-  echo "" >> "$msg_file"
-  echo "---" >> "$msg_file"
-  echo "**Director** (${now}):" >> "$msg_file"
-  echo "" >> "$msg_file"
-  echo "$message" >> "$msg_file"
+  # Create tmux pane
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux split-pane -t "$SESSION" -c "$worktree_dir"
+    tmux select-layout -t "$SESSION" tiled
+  else
+    tmux new-session -d -s "$SESSION" -c "$worktree_dir" -x "$(tput cols)" -y "$(tput lines)"
+    tmux set-option -t "$SESSION" remain-on-exit off
+  fi
 
-  log "Message sent to ${session_name}"
+  # Start Claude
+  local install_cmd=""
+  if ! $no_install; then
+    install_cmd=$(detect_install_cmd "$REPO_ROOT")
+    [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
+  fi
+
+  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${system_prompt_file}')\" --permission-mode acceptEdits" Enter
+  tmux select-layout -t "$SESSION" tiled
+
+  # Output JSON for the bridge to parse
+  echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
 }
 
-cmd_status() {
-  cmd_sitrep
-}
+# ── stop ─────────────────────────────────────────────────────────────
 
 cmd_stop() {
   local targets=("$@")
 
   if [ ${#targets[@]} -eq 0 ]; then
     log "Tearing down all fleet worktrees..."
-
-    tmux kill-session -t "$SESSION" 2>/dev/null && log "  Killed tmux session" || true
+    tmux kill-session -t "$SESSION" 2>/dev/null && log "Killed tmux session" || true
 
     if [ -d "$FLEET_BASE" ]; then
       for dir in "$FLEET_BASE"/*/; do
@@ -949,35 +222,24 @@ cmd_stop() {
         local name=$(basename "$dir")
         [ "$name" = "_bridge" ] && continue
         rm -f "${dir}/.fleet-prompt"
-        git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "  Removed $name" || warn "  Could not remove $name"
+        git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "Removed $name" || warn "Could not remove $name"
       done
-
       git -C "$REPO_ROOT" branch --list 'fleet/*' | while read -r branch; do
         branch=$(echo "$branch" | tr -d ' *')
-        git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null && log "  Deleted branch $branch" || true
+        git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null && log "Deleted branch $branch" || true
       done
     fi
-
     git -C "$REPO_ROOT" worktree prune
-    log "Fleet stopped."
-    log "Bridge data preserved at: ${BRIDGE_DIR}"
-    log "  To also clear bridge data: rm -rf ${FLEET_BASE}"
+    log "Fleet stopped. Bridge data preserved at ${BRIDGE_DIR}"
   else
     for target in "${targets[@]}"; do
-      local dir=""
-      if [ -d "${FLEET_BASE}/issue-${target}" ]; then
-        dir="${FLEET_BASE}/issue-${target}"
-      elif [ -d "${FLEET_BASE}/${target}" ]; then
-        dir="${FLEET_BASE}/${target}"
-      fi
-
-      if [ -n "$dir" ]; then
+      local dir="${FLEET_BASE}/${target}"
+      [ -d "$dir" ] || dir="${FLEET_BASE}/issue-${target}"
+      if [ -d "$dir" ]; then
         local name=$(basename "$dir")
-        local branch="fleet/${name}"
         rm -f "${dir}/.fleet-prompt"
         git -C "$REPO_ROOT" worktree remove --force "$dir" 2>/dev/null && log "Removed ${name}" || warn "Could not remove ${name}"
-        git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null || true
-        queue_update_status "$name" "stopped" 2>/dev/null || true
+        git -C "$REPO_ROOT" branch -D "fleet/${name}" 2>/dev/null || true
       else
         warn "No worktree found for '${target}'"
       fi
@@ -986,29 +248,68 @@ cmd_stop() {
   fi
 }
 
+# ── ls ───────────────────────────────────────────────────────────────
+
+cmd_ls() {
+  if [ ! -d "$FLEET_BASE" ]; then
+    echo "[]"
+    return
+  fi
+
+  # Output JSON array for Claude to parse
+  echo "["
+  local first=true
+  for dir in "$FLEET_BASE"/*/; do
+    [ -d "$dir" ] || continue
+    local name=$(basename "$dir")
+    [ "$name" = "_bridge" ] && continue
+
+    local status_file="${BRIDGE_DIR}/status/${name}.json"
+    local status="{}"
+    [ -f "$status_file" ] && status=$(cat "$status_file")
+
+    local branch
+    branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "unknown")
+
+    $first || echo ","
+    first=false
+    echo "  {\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${dir}\",\"status\":${status}}"
+  done
+  echo "]"
+}
+
+# ── attach ───────────────────────────────────────────────────────────
+
 cmd_attach() {
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux attach -t "$SESSION"
   else
-    err "No fleet session running. Start one with: fleet start <issues...>"
+    err "No fleet session. Spawn one first: fleet spawn <name>"
     exit 1
   fi
 }
 
-# ── Main ─────────────────────────────────────────────────────────────
+# ── info ─────────────────────────────────────────────────────────────
+
+cmd_info() {
+  cat <<EOF
+{"repo":"${REPO_NAME}","repo_root":"${REPO_ROOT}","fleet_base":"${FLEET_BASE}","bridge":"${BRIDGE_DIR}","tmux_session":"${SESSION}"}
+EOF
+}
+
+# ── main ─────────────────────────────────────────────────────────────
+
+usage() {
+  sed -n '3,10p' "$0" | sed 's/^# \?//'
+  exit 0
+}
 
 case "${1:-}" in
-  start)    shift; cmd_start "$@" ;;
-  new)      shift; cmd_new "$@" ;;
-  pr)       shift; cmd_pr "$@" ;;
-  sitrep)   cmd_sitrep ;;
-  status)   cmd_status ;;
-  dispatch) cmd_dispatch ;;
-  queue)    cmd_queue ;;
-  review)   shift; cmd_review "$@" ;;
-  message)  shift; cmd_message "$@" ;;
-  stop)     shift; cmd_stop "$@" ;;
-  attach)   cmd_attach ;;
+  spawn)   shift; cmd_spawn "$@" ;;
+  stop)    shift; cmd_stop "$@" ;;
+  attach)  cmd_attach ;;
+  ls)      cmd_ls ;;
+  info)    cmd_info ;;
   -h|--help|help|"") usage ;;
-  *)        err "Unknown command: $1"; usage ;;
+  *)       err "Unknown command: $1"; usage ;;
 esac
