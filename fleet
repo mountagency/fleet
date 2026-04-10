@@ -7,6 +7,7 @@ set -euo pipefail
 #   fleet spawn <name> [--from ref] [--prompt "..." | --prompt-file path]
 #   fleet stop [names...]   |  fleet attach  |  fleet ls  |  fleet info
 #   fleet resume <name> ["prompt"]  |  fleet telegram setup|send|test
+#   fleet watch start|stop|status|once|briefing
 
 # ── Project detection ────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -301,7 +302,47 @@ cmd_telegram() {
   esac
 }
 
-usage() { sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0; }
+# ── watch ──────────────────────────────────────────────────────────
+cmd_watch() {
+  local watch_script="${FLEET_INSTALL_DIR:-$HOME/.local/bin}/fleet-watch-github"
+  [ ! -f "$watch_script" ] && watch_script="$(dirname "$0")/fleet-watch-github"
+  local pid_file="${BRIDGE_DIR}/watch.pid"
+  case "${1:-}" in
+    start)
+      init_bridge
+      [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null && { warn "Watch already running (PID $(cat "$pid_file"))"; return; }
+      [ ! -f "$watch_script" ] && { err "fleet-watch-github not found"; exit 1; }
+      shift
+      "$watch_script" "$@" &
+      echo $! > "$pid_file"
+      log "Watch started (PID $!)"
+      ;;
+    stop)
+      [ ! -f "$pid_file" ] && { warn "Watch not running"; return; }
+      local pid; pid=$(cat "$pid_file")
+      kill "$pid" 2>/dev/null && log "Watch stopped (PID ${pid})" || warn "Process ${pid} already gone"
+      rm -f "$pid_file"
+      [ -f "${BRIDGE_DIR}/watch-briefing.md" ] && cat "${BRIDGE_DIR}/watch-briefing.md"
+      ;;
+    status)
+      if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then log "Watch running (PID $(cat "$pid_file"))"
+      else log "Watch not running"; fi
+      [ -f "${BRIDGE_DIR}/watch-state.json" ] && jq -r \
+        '"Last poll: \(.last_poll // "never") | Issues seen: \(.seen_events.issues // [] | length) | PRs seen: \(.seen_events.pulls // [] | length) | CI runs seen: \(.seen_events.runs // [] | length)"' \
+        "${BRIDGE_DIR}/watch-state.json" 2>/dev/null || true
+      ;;
+    once)
+      [ ! -f "$watch_script" ] && { err "fleet-watch-github not found"; exit 1; }
+      shift; "$watch_script" --once "$@"
+      ;;
+    briefing)
+      [ -f "${BRIDGE_DIR}/watch-briefing.md" ] && cat "${BRIDGE_DIR}/watch-briefing.md" || warn "No briefing yet"
+      ;;
+    *) err "Usage: fleet watch start|stop|status|once|briefing"; exit 1 ;;
+  esac
+}
+
+usage() { sed -n '3,9p' "$0" | sed 's/^# \?//'; exit 0; }
 
 case "${1:-}" in
   spawn)    shift; cmd_spawn "$@" ;;
@@ -311,6 +352,7 @@ case "${1:-}" in
   ls)       cmd_ls ;;
   info)     cmd_info ;;
   telegram) shift; cmd_telegram "$@" ;;
+  watch)    shift; cmd_watch "$@" ;;
   -h|--help|help|"") usage ;;
   *)        err "Unknown command: $1"; usage ;;
 esac
