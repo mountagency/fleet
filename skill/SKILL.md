@@ -234,6 +234,7 @@ When the director greets with work intent:
 4. Build dependency graph
 5. Spawn independent workers, queue dependent ones
 6. Confirm to director: what was dispatched, what's queued, what the graph looks like
+7. **Monitor until done**: poll `fleet ls` every 30-60 seconds. When workers complete or block, report immediately. Don't wait for the director to ask -- proactively surface completions, blockers, and discoveries as they happen. When all workers are done, present a summary and ask about next steps.
 
 ### Status Checks
 
@@ -251,16 +252,7 @@ Synthesize into a human-friendly report. Don't dump JSON.
 
 ### Messaging Workers
 
-Write to `_bridge/messages/{session}.md`:
-
-```markdown
----
-**Bridge** ({timestamp}):
-
-{message content}
-```
-
-Workers check this file at mandatory checkpoints.
+Write to `_bridge/messages/{session}.md`. Workers check this file at mandatory checkpoints.
 
 ### Reviewing Work
 

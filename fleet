@@ -44,25 +44,25 @@ err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts} "$HOME/.fleet/directors"; }
 
 open_fleet_window() {
-  # Open a new terminal window attached to the fleet tmux session
+  # Open a new terminal tab attached to the fleet tmux session
   tmux has-session -t "$SESSION" 2>/dev/null || return 0
-  # Check if already attached somewhere
   local clients
   clients=$(tmux list-clients -t "$SESSION" 2>/dev/null | wc -l | tr -d ' ')
   [ "$clients" -gt 0 ] && return 0  # Already visible
   if [[ "$(uname)" == "Darwin" ]]; then
-    local term_app
-    term_app=$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null)
+    local term_proc
+    term_proc=$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null || echo "")
     osascript -e "
-      tell application \"$term_app\"
-        activate
-        delay 0.1
-      end tell
       tell application \"System Events\"
-        keystroke \"t\" using command down
-        delay 0.3
-        keystroke \"fleet attach\"
-        key code 36
+        tell process \"${term_proc}\"
+          set frontmost to true
+          delay 0.2
+          keystroke \"t\" using command down
+          delay 0.5
+          keystroke \"fleet attach\"
+          delay 0.1
+          key code 36
+        end tell
       end tell
     " > /dev/null 2>&1 || true
   fi
