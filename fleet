@@ -175,9 +175,10 @@ cmd_spawn() {
   fi
   tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --allowedTools 'Bash(*)' Read Edit Write Glob Grep Agent WebFetch WebSearch --disallowedTools 'Bash(git push origin main*)' 'Bash(git push --force*)' 'Bash(rm -rf /*)' 'Bash(rm -rf ~*)'" Enter
   # Wait for Claude to be ready in this specific pane, then send the task
-  local attempt
-  local ready=false
-  for attempt in $(seq 1 30); do
+  local max_wait="${FLEET_SPAWN_TIMEOUT:-120}"
+  local attempts=$(( max_wait / 2 ))
+  local attempt ready=false
+  for attempt in $(seq 1 "$attempts"); do
     sleep 2
     local pane_content
     pane_content=$(tmux capture-pane -t "$pane_id" -p 2>/dev/null || true)
@@ -187,7 +188,7 @@ cmd_spawn() {
     fi
   done
   if ! $ready; then
-    err "Claude failed to start for '${name}' after 60s. Cleaning up..."
+    err "Claude failed to start for '${name}' after ${max_wait}s. Cleaning up..."
     tmux kill-pane -t "$pane_id" 2>/dev/null || true
     git -C "$REPO_ROOT" worktree remove --force "$worktree_dir" 2>/dev/null || true
     git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null || true
