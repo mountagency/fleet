@@ -139,11 +139,11 @@ Before composing a worker prompt, run this pipeline to assemble relevant context
 
 ## Recipes
 
-Recipes are reusable workflow definitions in `.fleet/recipes/*.md`. They encode proven orchestration patterns as markdown with YAML frontmatter.
+Recipes are reusable workflow definitions. Built-in recipes ship at `~/.claude/skills/fleet/recipes/`. Project-specific recipes live at `.fleet/recipes/` (created by the director or suggested by the bridge).
 
 ### Using Recipes
 
-When the director references a workflow by name ("review PR 47", "prepare release 2.0", "onboard me"), scan `.fleet/recipes/` for matching recipes. Then:
+When the director references a workflow by name ("review PR 47", "prepare release 2.0", "onboard me"), scan both `~/.claude/skills/fleet/recipes/` and `.fleet/recipes/` for matching recipes. Project recipes take precedence. Then:
 
 1. Parse frontmatter for params, steps, and dependencies
 2. Resolve params from the director's message; prompt for missing required params

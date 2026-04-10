@@ -63,6 +63,18 @@ elif command -v wget >/dev/null 2>&1; then
 fi
 log "Installed worker protocol to $SKILL_DIR/"
 
+# Install built-in recipes
+RECIPE_DIR="$SKILL_DIR/recipes"
+mkdir -p "$RECIPE_DIR"
+for recipe in review-pr prepare-release onboard-codebase index-codebase; do
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "https://raw.githubusercontent.com/mountagency/fleet/main/skill/recipes/${recipe}.md" -o "$RECIPE_DIR/${recipe}.md"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$RECIPE_DIR/${recipe}.md" "https://raw.githubusercontent.com/mountagency/fleet/main/skill/recipes/${recipe}.md"
+  fi
+done
+log "Installed $(ls "$RECIPE_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ') recipes to $RECIPE_DIR/"
+
 # Check PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$INSTALL_DIR"; then
   warn "$INSTALL_DIR is not in your PATH"
