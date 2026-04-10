@@ -1,0 +1,17 @@
+{
+  "session": "build-watch-triage",
+  "completed_at": "2026-04-10T14:40:00Z",
+  "outcome": "committed a76e5ee",
+  "tags": ["fleet-watch", "triage", "bash"],
+  "files_touched": ["fleet-watch-triage"],
+  "features": ["watch-triage"],
+  "decisions": [
+    {"what": "Two-tier architecture: rules first, AI fallback", "why": "Matches the design doc exactly and keeps costs down by only calling Claude for ambiguous events"},
+    {"what": "Exit codes encode action type (0=act, 1=surface, 2=ignore)", "why": "Lets the caller (fleet-watch-github poller) branch on $? without parsing JSON"},
+    {"what": "Trusted authors read from .fleet/watch-config.yaml", "why": "Keeps config external and editable without modifying the script"}
+  ],
+  "discoveries": [
+    "jq substring slicing works as .[0:500] for truncating body text"
+  ],
+  "summary": "Built fleet-watch-triage, a 113-line bash script that classifies GitHub events using two tiers: rule-based pattern matching (P0-P2 keywords, CI failures, trusted authors) and AI fallback via claude --print. Outputs triage JSON and exit codes for the caller."
+}
