@@ -173,7 +173,7 @@ cmd_spawn() {
     install_cmd=$(detect_install_cmd "$REPO_ROOT")
     [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
   fi
-  tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --allowedTools 'Bash(*)' Read Edit Write Glob Grep Agent WebFetch WebSearch" Enter
+  tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --allowedTools 'Bash(*)' Read Edit Write Glob Grep Agent WebFetch WebSearch --disallowedTools 'Bash(git push origin main*)' 'Bash(git push --force*)' 'Bash(rm -rf /*)' 'Bash(rm -rf ~*)'" Enter
   # Wait for Claude to be ready in this specific pane, then send the task
   local attempt
   local ready=false

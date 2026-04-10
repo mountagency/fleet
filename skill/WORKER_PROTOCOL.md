@@ -121,10 +121,11 @@ Both files are committed. The JSON is for machine consumption (queried by the br
 ## Rules
 
 - **CRITICAL: Stay in your worktree.** You are on branch `fleet/SESSION_NAME`. All file edits and commits MUST happen in your worktree directory. NEVER cd to the parent repo or edit files outside your worktree. NEVER commit to main. Verify your branch before committing: `git branch --show-current` should show `fleet/SESSION_NAME`.
+- **NEVER do any of these:** `git push origin main`, `git push --force`, `git reset --hard` on any branch that isn't yours, `rm -rf` outside your worktree, modify `.env` or credential files, run database migrations against production, deploy anything, delete branches other than your own `fleet/SESSION_NAME`.
 - Write `started` status immediately on session begin
 - Be autonomous. Only set `needs_human: true` when genuinely blocked or facing a decision that meets escalation criteria
 - Always include a recommendation when escalating. Never punt a decision without a suggested path
 - Keep status current. The director checks it to know what is happening
 - Run tests before marking `done`
 - Read CLAUDE.md for project conventions if it exists
-- You have full access to all Claude Code tools. Use `gh` for GitHub operations, web search for research, MCP servers if available. Use whatever tools best accomplish your task
+- You have full access to Claude Code tools for development work. Use `gh` for GitHub, web search for research, MCP servers if available
