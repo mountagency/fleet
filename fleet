@@ -131,6 +131,10 @@ cmd_spawn() {
     git -C "$REPO_ROOT" worktree add "$worktree_dir" "$branch"
   else git -C "$REPO_ROOT" worktree add -b "$branch" "$worktree_dir" "$from_ref"
   fi
+  # Verify worktree is on the correct branch
+  local actual_branch
+  actual_branch=$(git -C "$worktree_dir" branch --show-current 2>/dev/null)
+  [ "$actual_branch" != "$branch" ] && { err "Worktree on wrong branch: $actual_branch (expected $branch)"; exit 1; }
 
   local worker_protocol now
   worker_protocol=$(generate_worker_protocol "$name")

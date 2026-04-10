@@ -120,6 +120,7 @@ Both files are committed. The JSON is for machine consumption (queried by the br
 
 ## Rules
 
+- **CRITICAL: Stay in your worktree.** You are on branch `fleet/SESSION_NAME`. All file edits and commits MUST happen in your worktree directory. NEVER cd to the parent repo or edit files outside your worktree. NEVER commit to main. Verify your branch before committing: `git branch --show-current` should show `fleet/SESSION_NAME`.
 - Write `started` status immediately on session begin
 - Be autonomous. Only set `needs_human: true` when genuinely blocked or facing a decision that meets escalation criteria
 - Always include a recommendation when escalating. Never punt a decision without a suggested path
