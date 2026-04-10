@@ -169,7 +169,7 @@ cmd_spawn() {
   done
   tmux send-keys -t "$pane_id" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
   tmux select-layout -t "$SESSION" tiled
-  $first_spawn && open_fleet_window
+  open_fleet_window
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
 }
 
