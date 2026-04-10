@@ -298,5 +298,18 @@ echo "{\"ts\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"event\":\"watcher_started\"
 while true; do
   check_status_changes
   tg_poll
+  # Auto-cleanup: if all workers are done or failed, stop the fleet
+  local all_done=true
+  for sf in "${BRIDGE_DIR}"/status/*.json; do
+    [ -f "$sf" ] || continue
+    local p
+    p=$(jq -r '.phase // "unknown"' "$sf" 2>/dev/null)
+    [[ "$p" != "done" && "$p" != "failed" ]] && { all_done=false; break; }
+  done
+  if $all_done && ls "${BRIDGE_DIR}"/status/*.json &>/dev/null; then
+    tg_send "All workers finished. Cleaning up fleet."
+    "$FLEET_CMD" stop > /dev/null 2>&1 || true
+    exit 0
+  fi
   sleep "$POLL_INTERVAL"
 done
