@@ -139,14 +139,15 @@ cmd_spawn() {
   echo "{\"session\":\"${name}\",\"phase\":\"starting\",\"summary\":\"Session initializing\",\"files_changed\":[],\"needs_human\":false,\"blocked_reason\":null,\"escalation\":null,\"ci_status\":null,\"started_at\":\"${now}\",\"updated_at\":\"${now}\"}" > "$BRIDGE_DIR/status/${name}.json"
   echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${name}.jsonl"
 
-  local first_spawn=false
+  local first_spawn=false pane_id
   if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux split-pane -t "$SESSION" -c "$worktree_dir"
+    pane_id=$(tmux split-pane -t "$SESSION" -c "$worktree_dir" -P -F '#{pane_id}')
   else
     first_spawn=true
     tmux new-session -d -s "$SESSION" -c "$worktree_dir" -x "$(tput cols)" -y "$(tput lines)"
     tmux set-option -t "$SESSION" remain-on-exit off
     tmux set-option -t "$SESSION" allow-passthrough on
+    pane_id=$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | head -1)
   fi
 
   # Start claude interactively with protocol as system prompt
@@ -155,18 +156,18 @@ cmd_spawn() {
     install_cmd=$(detect_install_cmd "$REPO_ROOT")
     [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
   fi
-  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --dangerously-skip-permissions" Enter
-  # Wait for Claude to be ready, then send the task
+  tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --dangerously-skip-permissions" Enter
+  # Wait for Claude to be ready in this specific pane, then send the task
   local attempt
-  for attempt in $(seq 1 20); do
+  for attempt in $(seq 1 30); do
     sleep 2
     local pane_content
-    pane_content=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null || true)
-    if echo "$pane_content" | grep -q "❯\|>\|claude"; then
+    pane_content=$(tmux capture-pane -t "$pane_id" -p 2>/dev/null || true)
+    if echo "$pane_content" | grep -q "❯"; then
       break
     fi
   done
-  tmux send-keys -t "$SESSION" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
+  tmux send-keys -t "$pane_id" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
   tmux select-layout -t "$SESSION" tiled
   $first_spawn && open_fleet_window
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
