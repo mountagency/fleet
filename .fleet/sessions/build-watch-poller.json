@@ -1,0 +1,15 @@
+{
+  "session": "build-watch-poller",
+  "completed_at": "2026-04-10T14:40:00Z",
+  "outcome": "committed fleet-watch-github script",
+  "tags": ["fleet-watch", "github-polling", "bash"],
+  "files_touched": ["fleet-watch-github"],
+  "features": ["github-event-polling", "etag-conditional-requests", "telegram-notifications", "watch-state-tracking"],
+  "decisions": [
+    {"what": "Used gh api --include for ETag support", "why": "gh api supports --include to get response headers, needed for ETag-conditional polling"},
+    {"what": "Separate jq extraction per item type (runs vs issues/pulls)", "why": "Actions runs have different JSON structure (workflow_runs wrapper, actor vs user, no labels)"},
+    {"what": "Atomic state updates via tmp file + mv", "why": "Prevents corruption if script is killed mid-write"}
+  ],
+  "discoveries": ["gh api --include returns headers + body separated by blank line, usable for ETag extraction"],
+  "summary": "Built fleet-watch-github, a 135-line bash script that polls GitHub issues, PRs, and failed CI runs via gh api with ETag-conditional requests. Writes new events to bridge watch-events/ directory, appends to watch-briefing.md, sends Telegram notifications, and tracks seen IDs in watch-state.json to avoid reprocessing."
+}

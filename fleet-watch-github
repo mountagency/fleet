@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# fleet-watch-github - GitHub event poller for Fleet Watch
+# Polls issues, PRs, and CI runs via gh api. Writes new events to bridge files.
+
+BRIDGE_DIR="${1:?Usage: fleet-watch-github <bridge_dir>}"
+POLL_INTERVAL="${WATCH_POLL_INTERVAL:-60}"
+TELEGRAM_CONFIG="${HOME}/.fleet/telegram.json"
+STATE_FILE="${BRIDGE_DIR}/watch-state.json"
+EVENTS_DIR="${BRIDGE_DIR}/watch-events"
+BRIEFING_FILE="${BRIDGE_DIR}/watch-briefing.md"
+LOG_FILE="${BRIDGE_DIR}/log/_watch.jsonl"
+mkdir -p "$EVENTS_DIR" "${BRIDGE_DIR}/log"
+
+REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+[[ -n "$REPO_SLUG" ]] || { echo "fatal: could not determine repo" >&2; exit 1; }
+
+log_event() {
+  printf '{"ts":"%s","event":"%s","detail":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$(echo "$2" | sed 's/"/\\"/g')" >> "$LOG_FILE"
+}
+
+tg_send() {
+  [[ -f "$TELEGRAM_CONFIG" ]] || return 0
+  local token; token=$(jq -r .bot_token "$TELEGRAM_CONFIG")
+  local chat_id; chat_id=$(jq -r .chat_id "$TELEGRAM_CONFIG")
+  curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+    -d chat_id="$chat_id" -d text="$1" -d parse_mode=Markdown > /dev/null 2>&1 || true
+}
+
+init_state() {
+  [[ -f "$STATE_FILE" ]] && return 0
+  cat > "$STATE_FILE" << EOF
+{
+  "last_poll": null,
+  "etags": { "issues": null, "pulls": null, "runs": null },
+  "seen_events": { "issues": [], "pulls": [], "runs": [] },
+  "session_start": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+state_set() { local tmp="${STATE_FILE}.tmp"; jq "$1" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"; }
+is_seen() { jq -e ".seen_events.${1} | index(${2})" "$STATE_FILE" > /dev/null 2>&1; }
+mark_seen() { state_set ".seen_events.${1} += [${2}]"; }
+
+poll_endpoint() {
+  local type="$1" endpoint="$2"
+  local etag etag_header response http_code body new_etag
+
+  etag=$(jq -r ".etags.${type}" "$STATE_FILE" 2>/dev/null)
+  etag_header=""
+  [[ "$etag" != "null" && -n "$etag" ]] && etag_header="-H If-None-Match:${etag}"
+
+  response=$(gh api "$endpoint" --include $etag_header 2>/dev/null) || return 0
+  http_code=$(echo "$response" | head -1 | grep -oE '[0-9]{3}')
+  [[ "$http_code" == "304" ]] && return 0
+
+  new_etag=$(echo "$response" | grep -i '^etag:' | sed 's/^[^:]*: *//' | tr -d '\r' || true)
+  [[ -n "$new_etag" ]] && state_set ".etags.${type} = \"${new_etag}\""
+
+  body=$(echo "$response" | sed '1,/^\r*$/d')
+  local items
+  if [[ "$type" == "runs" ]]; then
+    items=$(echo "$body" | jq -c '.workflow_runs // []')
+  else
+    items=$(echo "$body" | jq -c '. // []')
+  fi
+
+  local count; count=$(echo "$items" | jq 'length')
+  [[ "$count" -gt 0 ]] || return 0
+
+  local i
+  for ((i = 0; i < count; i++)); do
+    local id title author created_at labels body_text number
+    if [[ "$type" == "runs" ]]; then
+      id=$(echo "$items" | jq ".[$i].id")
+      number="$id"
+      title=$(echo "$items" | jq -r ".[$i].display_title // .[$i].name")
+      author=$(echo "$items" | jq -r ".[$i].actor.login // \"unknown\"")
+      created_at=$(echo "$items" | jq -r ".[$i].created_at")
+      labels="[]"
+      body_text=$(echo "$items" | jq -r ".[$i].conclusion // \"failed\"")
+    else
+      id=$(echo "$items" | jq ".[$i].number")
+      number="$id"
+      title=$(echo "$items" | jq -r ".[$i].title")
+      author=$(echo "$items" | jq -r ".[$i].user.login // \"unknown\"")
+      created_at=$(echo "$items" | jq -r ".[$i].created_at")
+      labels=$(echo "$items" | jq -c "[.[$i].labels[]?.name]")
+      body_text=$(echo "$items" | jq -r ".[$i].body // \"\"" | head -c 500)
+    fi
+
+    is_seen "$type" "$id" && continue
+    mark_seen "$type" "$id"
+
+    local event_file="${EVENTS_DIR}/${type}-${number}.json"
+    jq -n \
+      --arg type "$type" \
+      --arg number "$number" \
+      --arg title "$title" \
+      --arg body "$body_text" \
+      --arg author "$author" \
+      --argjson labels "$labels" \
+      --arg created_at "$created_at" \
+      '{type: $type, number: ($number | tonumber), title: $title, body: $body, author: $author, labels: $labels, created_at: $created_at}' \
+      > "$event_file"
+
+    local label_str=""
+    [[ "$labels" != "[]" ]] && label_str=" ($(echo "$labels" | jq -r 'join(", ")'))"
+    {
+      echo ""
+      echo "### New ${type%s} #${number} -- $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "- **Title:** ${title}"
+      echo "- **Author:** @${author}${label_str}"
+    } >> "$BRIEFING_FILE"
+
+    local type_label="${type%s}"
+    tg_send "🔔 New ${type_label} #${number}: ${title} (by @${author})"
+    log_event "new_${type_label}" "#${number}: ${title}"
+  done
+}
+
+init_state
+log_event "watch_started" "Polling ${REPO_SLUG} every ${POLL_INTERVAL}s"
+
+[[ -f "$BRIEFING_FILE" ]] || printf "# Watch Briefing\nRepo: %s\nStarted: %s\n" "$REPO_SLUG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$BRIEFING_FILE"
+
+while true; do
+  poll_endpoint "issues" "repos/${REPO_SLUG}/issues?state=open&sort=created&direction=desc&per_page=10"
+  poll_endpoint "pulls"  "repos/${REPO_SLUG}/pulls?state=open&sort=created&direction=desc&per_page=10"
+  poll_endpoint "runs"   "repos/${REPO_SLUG}/actions/runs?status=failure&per_page=5"
+  state_set ".last_poll = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  sleep "$POLL_INTERVAL"
+done
