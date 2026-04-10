@@ -146,6 +146,7 @@ cmd_spawn() {
     first_spawn=true
     tmux new-session -d -s "$SESSION" -c "$worktree_dir" -x "$(tput cols)" -y "$(tput lines)"
     tmux set-option -t "$SESSION" remain-on-exit off
+    tmux set-option -t "$SESSION" allow-passthrough on
   fi
 
   # Start claude interactively with protocol as system prompt
