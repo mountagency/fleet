@@ -167,7 +167,9 @@ cmd_spawn() {
       break
     fi
   done
-  tmux send-keys -t "$pane_id" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
+  tmux send-keys -t "$pane_id" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")"
+  sleep 0.5
+  tmux send-keys -t "$pane_id" Enter
   tmux select-layout -t "$SESSION" tiled
   open_fleet_window
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
