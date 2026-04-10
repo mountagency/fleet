@@ -1,70 +1,53 @@
 # Fleet
 
-Software is no longer built by typing code. It's built by directing intent.
+You're deep in a feature. A bug report comes in. A PR needs review. A customer call surfaces an urgent fix.
 
-Fleet turns Claude Code into a parallel engineering team. You open your terminal, say what you want to build, and Fleet decomposes the work, dispatches autonomous sessions, coordinates their output, and ships the result. You stay in one conversation. The work happens around you.
+Today, you stop. Stash changes. Switch branches. Lose your context. Fix the thing. Switch back. Try to remember where you were.
 
-This is not a task runner. This is not a wrapper around git commands. This is the operating layer for AI-native software development.
+Fleet means you never stop. You say "fix issue 42" and it happens in the background -- separate branch, separate session, separate worktree. Your work continues. You approve the PR from your phone. You never lost your place.
 
-## Why Fleet exists
+## What it actually does
 
-We're in the middle of a phase change in how software gets built. The bottleneck is no longer writing code. It's deciding what to write, understanding why it matters, and coordinating the work. Those are human problems. Everything downstream of a clear decision can be automated.
-
-Today, Claude Code is a single-threaded conversation. One session, one task, one branch. You context-switch between issues manually. You run reviews yourself. You remember which PR needs what. That's the old model.
-
-Fleet makes Claude Code multi-threaded. You talk to one session (the bridge) and it orchestrates many (the workers). Each worker gets its own git worktree, its own branch, its own tmux pane. They run in parallel, follow a communication protocol, and report back. You make decisions. They make code.
-
-The developer becomes a director. The product manager becomes the bottleneck again (in a good way). The constraint moves from "how fast can I type" to "how clearly can I think."
-
-## What it looks like
+Fleet gives Claude Code **parallel sessions with branch isolation**. Each session runs in its own git worktree, on its own branch, in its own tmux pane. Your main work is never touched.
 
 ```
-You:    "The onboarding is losing people."
-Claude: "Before I dispatch work -- what's the signal? High drop-off on a specific
-         step, or a general feeling from customer feedback?"
+You:    [deep in Guest Portal feature work]
+You:    "A customer reported checkout fails on mobile. Can you fix it?"
+Claude: Spawns a worker on a separate branch. You keep working.
 
-You:    "Analytics show 60% drop at the profile setup step."
-Claude: "Got it. I'll decompose this into three parallel tracks:
-         1. Audit the current profile setup flow (code + UX)
-         2. Research how top products handle progressive profiling
-         3. Analyze the analytics data for patterns in who drops off
-         Assumptions: we want to keep the existing page structure and improve it,
-         not rebuild from scratch. Tests required. Correct?"
-
-You:    "Yes. Go."
-Claude: "3 workers dispatched. Research has no dependencies. Audit and analytics
-         are independent. I'll synthesize findings when all three complete."
-
-You:    [30 minutes later] "Status?"
-Claude: "Research done -- wrote findings to docs/onboarding-research.md.
-         Audit found the profile form makes 4 separate API calls on submit.
-         Analytics worker is blocked:
-
-         Decision needed: The analytics data is in two formats -- legacy events
-         and new Segment events. Should the worker analyze both or just Segment?
-         My recommendation: both, since the drop-off predates the Segment migration.
-         Stakes: low (it's an analysis task, easily re-run).
-
-         Approve my recommendation?"
-
-You:    "Yes, both."
-Claude: "Sent guidance. I'll have a synthesis ready when all three complete."
+        [10 minutes later]
+Claude: "fix-checkout done. PR #91 created, tests green. Merge?"
+You:    "Yes."
+Claude: Merged. Your Guest Portal work never stopped.
 ```
 
-No flags. No configuration files. No CLI to learn. Just conversation.
+It also works from your phone:
 
-**From your phone (Telegram):**
 ```
-Fleet:  "fix-calendar done. PR #84, tests green. Merge? [Yes / Review first]"
+Fleet:  "fix-checkout done. PR #91, tests green. Merge?"
 You:    "Yes"
-Fleet:  "Merged. Dispatching next from queue: refactor-billing."
+Fleet:  "Merged."
 
-Fleet:  "auth-refactor needs a decision (high stakes):
-         PKCE or auth code flow? I recommend PKCE -- simpler,
-         better for mobile. Reply A or B."
-You:    "A"
-Fleet:  "Sent to auth-refactor. It'll pick up at next checkpoint."
+Fleet:  "PR #47 from Alice ready for review."
+You:    "Review it"
+Fleet:  [spawns reviewer, posts GitHub comments]
 ```
+
+## When to use Fleet
+
+**Use Fleet when you'd otherwise context-switch:**
+- Bug comes in while you're building a feature
+- PR needs review but you're mid-task
+- Quick fix needed on a different branch
+- Research task you want running in the background
+- Multiple independent issues to tackle in parallel
+
+**Don't use Fleet when:**
+- You're doing deep, interconnected work on one feature (just use Claude Code directly)
+- The task requires your full attention and judgment
+- You need tight back-and-forth iteration
+
+Fleet is best at handling **everything around your main work** so you can stay focused.
 
 ## Install
 
@@ -84,181 +67,94 @@ curl -fsSL https://raw.githubusercontent.com/mountagency/fleet/main/install.sh |
 ```bash
 cp fleet ~/.local/bin/fleet && chmod +x ~/.local/bin/fleet
 cp fleet-watcher ~/.local/bin/fleet-watcher && chmod +x ~/.local/bin/fleet-watcher
-mkdir -p ~/.claude/skills/fleet && cp skill/SKILL.md ~/.claude/skills/fleet/SKILL.md
+cp fleet-watch-github ~/.local/bin/fleet-watch-github && chmod +x ~/.local/bin/fleet-watch-github
+cp fleet-watch-triage ~/.local/bin/fleet-watch-triage && chmod +x ~/.local/bin/fleet-watch-triage
+mkdir -p ~/.claude/skills/fleet
+cp skill/SKILL.md ~/.claude/skills/fleet/SKILL.md
 cp skill/WORKER_PROTOCOL.md ~/.claude/skills/fleet/WORKER_PROTOCOL.md
+cp -r skill/recipes ~/.claude/skills/fleet/recipes
 ```
+
+## How it works
+
+You're in a Claude Code session working on your feature. Something else comes up. You tell Claude about it. Fleet handles it:
+
+1. **Spawns a worker** in a separate git worktree on branch `fleet/{name}`
+2. **Worker runs autonomously** -- full Claude Code session with file access, terminal, GitHub CLI
+3. **You keep working** -- your branch, your context, your flow state are untouched
+4. **Worker reports back** -- via the bridge session or Telegram
+5. **You approve** -- merge the PR, review the output, or send it back for changes
+
+Workers appear in a separate terminal tab (auto-opened on macOS). You can glance at them or ignore them entirely.
+
+### What you see
+
+Your terminal has two tabs:
+- **Tab 1**: Your main Claude Code session (you're working here)
+- **Tab 2**: Fleet workers (auto-opened, one pane per worker)
+
+When a worker finishes, Claude tells you in your main session. Or if you have Telegram set up, on your phone.
+
+## Telegram (optional)
+
+Fleet can notify you on Telegram when workers complete or need decisions. You can reply from your phone.
+
+```bash
+fleet telegram setup    # One-time: create bot, connect
+```
+
+Then from Telegram:
+- Get notified when workers finish, get blocked, or need decisions
+- Reply with commands: "merge it", "yes", "stop that worker"
+- Send natural language: "fix the login bug" (Fleet interprets and acts)
+- Check status: "status" or "what's happening"
+
+## Recipes
+
+Fleet comes with reusable workflow recipes for common tasks:
+
+**Review a PR:**
+> "Review PR 47"
+
+Spawns parallel workers for code review, security audit, and test coverage analysis. Posts findings as GitHub comments.
+
+**Prepare a release:**
+> "Prepare release 2.0"
+
+Generates changelog, checks dependencies, bumps version, validates, creates PR.
+
+**Onboard a codebase:**
+> "Onboard me to this codebase"
+
+Maps architecture, discovers conventions, checks test coverage, writes findings to `.fleet/knowledge/`.
+
+Recipes live at `~/.claude/skills/fleet/recipes/`. You can create your own in `.fleet/recipes/`.
+
+## Fleet Watch
+
+Monitor your GitHub repo autonomously:
+
+```bash
+fleet watch start     # Start monitoring issues, PRs, CI
+fleet watch stop      # Stop, show briefing
+fleet watch status    # Check what's happening
+```
+
+Fleet Watch polls GitHub for new events, triages them (rule-based + AI), and acts on high-priority items -- reviewing PRs, investigating CI failures, labeling issues. Lower-priority items go to your Telegram or the briefing.
 
 ## Architecture
 
-Fleet is intentionally split into two layers with very different jobs.
+Two layers, sharply separated:
 
-### The script: plumbing
+**Scripts (plumbing):** `fleet` creates worktrees, manages tmux, starts Claude sessions. `fleet-watcher` handles Telegram and background monitoring. `fleet-watch-github` and `fleet-watch-triage` handle GitHub monitoring. All bash, no dependencies beyond git/tmux/jq/curl.
 
-The `fleet` bash script does exactly four things:
+**Skill (intelligence):** `skill/SKILL.md` teaches Claude Code how to be a bridge -- decompose work, compose prompts, coordinate workers, escalate decisions. `skill/WORKER_PROTOCOL.md` teaches workers how to report status and communicate via the bridge.
 
-```bash
-fleet spawn <name> [--from ref] [--prompt "..."]   # Worktree + tmux + Claude
-fleet stop [names...]                                # Tear down
-fleet attach                                         # Re-attach tmux
-fleet ls                                             # List worktrees (JSON)
-```
-
-It creates git worktrees, manages tmux panes, starts Claude Code sessions with the worker protocol, and cleans up when done. It auto-detects your project type (Rails, Node, Python, Rust, Go, Elixir) for dependency installation. Nothing more. Under 200 lines of bash.
-
-### The skill: intelligence
-
-The `skill/SKILL.md` is where Fleet actually lives. It teaches Claude Code to be a chief of staff:
-
-- Why-drill vague intent before dispatching work
-- Detect and surface assumptions so the director can confirm or correct
-- Escalate honestly when workers are blocked, with recommendations and stakes
-- Choose context strategies (full codebase, targeted files, discovery docs) per worker
-- Build dependency graphs so workers execute in the right order
-- Manage a task queue with priority and concurrency limits
-- Orchestrate the full lifecycle from idea to shipped code
-
-The skill doesn't limit what workers can do. Each worker is a full Claude Code session with access to everything: file editing, terminal, web search, GitHub CLI, MCP servers. The skill just teaches the bridge how to direct them.
-
-### The worker protocol: coordination
-
-The `skill/WORKER_PROTOCOL.md` is a standalone document given to every worker session. It defines the checkpoint protocol and bridge file conventions:
-
-```
-.fleet-workers/
-  _bridge/
-    status/{session}.json       # Phase, summary, blockers, CI status
-    log/{session}.jsonl          # Append-only event history
-    messages/{session}.md        # Bridge-to-worker instructions
-    discoveries/{topic}.md       # Knowledge shared across sessions
-    queue.json                   # Task queue with priority and state
-    graph.json                   # Dependency graph across workers
-```
-
-Workers write status after every phase change. The bridge reads it when you ask for a sitrep. Workers check for messages before major decisions. If they learn something non-obvious about the codebase, they write a discovery that other sessions can benefit from.
-
-Simple files. No database. No daemon. No framework.
-
-## Examples
-
-Everything below is a natural language conversation with Claude Code. Fleet activates automatically through the skill.
-
-**Start of day:**
-> "Good morning! What do we have today?"
-
-**Dispatch work:**
-> "Let's tackle issues 12, 15, and 23."
-
-**Explore an idea:**
-> "I've been thinking about adding a waitlist for sold-out events. Can you research how other platforms handle this and write up a brief?"
-
-**Fix a bug from a customer call:**
-> "Just got off a call. Customer says check-in fails on mobile when there are multiple guests. Can you investigate and fix?"
-
-**Review and comment on a PR:**
-> "Review PR 47 and post your feedback as GitHub comments."
-
-**Direct a worker:**
-> "Tell the auth session to use OAuth2 PKCE instead of the implicit flow."
-
-**Check progress:**
-> "What's happening?"
-
-**Unblock a session:**
-> "The calendar session is blocked? Tell it to use UTC everywhere. We'll handle timezone display in the frontend."
-
-**Ship it:**
-> "issue-38 looks good. Create a PR and merge it."
-
-**Non-code work:**
-> "Write a changelog summarizing what we shipped this week."
-> "Research how competitors handle multi-location pricing."
-> "Draft a product spec for the loyalty program feature."
-
-**End of day:**
-> "Wrap up. What did we ship today?"
-
-## tmux basics
-
-Fleet creates a tmux session with one pane per worker. You don't need to know tmux to use Fleet, but four shortcuts help:
-
-| Keys | Action |
-|---|---|
-| `Ctrl-b d` | Detach (everything keeps running in background) |
-| `Ctrl-b` + arrows | Move between panes |
-| `Ctrl-b z` | Zoom/unzoom current pane (fullscreen toggle) |
-| `fleet attach` | Re-attach to the session |
-
-## Telegram notifications
-
-Fleet can send you notifications via Telegram when workers complete, get blocked, or need decisions. You can reply from your phone.
-
-### Setup
-
-```bash
-fleet telegram setup
-```
-
-This walks you through creating a Telegram bot and connecting it to Fleet. One-time setup.
-
-### Detach / Reattach
-
-```bash
-fleet detach     # Fleet keeps working, notifications go to Telegram
-fleet attach     # Come back, get a briefing of what happened
-```
-
-While detached:
-- Workers keep running in tmux
-- Completions and blockers trigger Telegram notifications
-- You can reply via Telegram ("merge it", "use option A", "stop that worker")
-- When you reattach, Claude gives you a structured briefing of everything that happened
-
-This means you can start a fleet, walk to a meeting, approve a PR from your phone, and come back to find everything merged and the next batch of work in progress.
-
-## Project type detection
-
-Fleet detects your stack and handles dependency installation automatically:
-
-| Detected | Install |
-|---|---|
-| `Gemfile` | `bundle install` |
-| `package-lock.json` | `npm install` |
-| `yarn.lock` | `yarn install` |
-| `pnpm-lock.yaml` | `pnpm install` |
-| `requirements.txt` | `pip install -r requirements.txt` |
-| `pyproject.toml` + `uv.lock` | `uv sync` |
-| `pyproject.toml` + `poetry.lock` | `poetry install` |
-| `Cargo.toml` | `cargo build` |
-| `go.mod` | `go mod download` |
-| `mix.exs` | `mix deps.get` |
-
-## Fleet learns
-
-Fleet gets smarter the more you use it. Three types of knowledge accumulate:
-
-**Codebase knowledge** (`.fleet/knowledge/`) -- committed to your repo. As workers explore the codebase, Fleet records architecture, conventions, and gotchas. New workers start with institutional knowledge instead of cold-reading the repo.
-
-**Execution patterns** (`.fleet/knowledge/patterns.md`) -- committed to your repo. Fleet records what orchestration strategies work: which tasks parallelize safely, where conflicts happen, what takes longer than expected. Decomposition improves over time.
-
-**Director model** (`~/.fleet/directors/`) -- local to your machine. Fleet learns your preferences: how you decompose problems, your quality bar, your communication style. Fewer clarifying questions over time.
-
-All knowledge is plain markdown. No database, no service. Read it, edit it, delete it. It's your data.
-
-## Where this is going
-
-Fleet v2 shipped the intelligent bridge (why-drilling, honest escalation, reactive coordination). Here's what's next:
-
-- **Telegram integration.** Direct the fleet from your phone. Get notified when workers complete or need decisions. Detach from the terminal and reattach with a full briefing.
-- **~~Persistent fleet memory.~~** Shipped. Workers accumulate knowledge in `.fleet/knowledge/`.
-- **~~Director model.~~** Shipped. Fleet learns preferences in `~/.fleet/directors/`.
-- **Multi-repo support.** Direct work across repositories from a single bridge.
-- **Agent-agnostic backends.** The worker protocol is file-based and agent-agnostic. Pluggable backends for other AI coding tools are architecturally ready.
+**Coordination (files):** Workers communicate through files in `.fleet-workers/_bridge/` -- status JSON, event logs, message files, discoveries. Simple, debuggable, no database.
 
 ## Contributing
 
-Fleet is open source under MIT. We're building this in public because we believe the future of software development is directing intent, not typing code, and that future should be open.
-
-The best way to contribute right now is to use Fleet, find where it breaks, and open issues.
+Fleet is open source under MIT. The best way to contribute is to use it, find where it breaks, and open issues.
 
 ## License
 
