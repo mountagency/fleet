@@ -61,67 +61,23 @@ init_bridge() {
 
 # ── Worker protocol ──────────────────────────────────────────────────
 
-worker_protocol() {
-  local session_name="$1"
-  cat <<'PROTOCOL'
-
----
-
-## Fleet Worker Protocol
-
-You are an autonomous worker in a fleet of parallel Claude Code sessions. A human director oversees the fleet from a bridge session. Follow this protocol.
-
-### Status Updates
-Write to `BRIDGE_DIR/status/SESSION_NAME.json` after every phase change:
-
-```json
-{
-  "session": "SESSION_NAME",
-  "phase": "analyzing",
-  "summary": "Brief description of current activity",
-  "files_changed": [],
-  "needs_human": false,
-  "blocked_reason": null,
-  "ci_status": null,
-  "updated_at": "ISO-8601 timestamp"
-}
-```
-
-Phases: `analyzing`, `implementing`, `testing`, `blocked`, `done`, `failed`
-
-### Event Log
-Append to `BRIDGE_DIR/log/SESSION_NAME.jsonl`:
-```bash
-echo '{"ts":"...","event":"...","detail":"..."}' >> BRIDGE_DIR/log/SESSION_NAME.jsonl
-```
-
-### Discoveries
-Write non-obvious findings to `BRIDGE_DIR/discoveries/{topic-slug}.md`. Other sessions benefit from these.
-
-### Messages
-Check `BRIDGE_DIR/messages/SESSION_NAME.md` before starting implementation and before major decisions. The director may have sent instructions.
-
-### Rules
-- Write `started` status immediately
-- Be autonomous. Only set `needs_human: true` when genuinely blocked
-- Keep status current. The director checks it to know what's happening
-- Run tests before marking `done`
-- Commit with descriptive messages
-- Read CLAUDE.md for project conventions if it exists
-- You have full access to all Claude Code tools. Use `gh` for GitHub operations, web search for research, MCP servers if available. Use whatever tools best accomplish your task.
-PROTOCOL
-}
+PROTOCOL_FILE="${FLEET_SKILL_DIR:-$HOME/.claude/skills/fleet}/WORKER_PROTOCOL.md"
 
 generate_worker_prompt() {
   local session_name="$1"
   local task_prompt="$2"
 
+  if [ ! -f "$PROTOCOL_FILE" ]; then
+    err "Worker protocol not found at $PROTOCOL_FILE. Run install.sh."
+    exit 1
+  fi
+
   local protocol
-  protocol=$(worker_protocol "$session_name")
+  protocol=$(cat "$PROTOCOL_FILE")
   protocol="${protocol//BRIDGE_DIR/$BRIDGE_DIR}"
   protocol="${protocol//SESSION_NAME/$session_name}"
 
-  printf '%s\n%s' "$task_prompt" "$protocol"
+  printf '%s\n\n---\n\n%s' "$task_prompt" "$protocol"
 }
 
 # ── spawn ────────────────────────────────────────────────────────────
