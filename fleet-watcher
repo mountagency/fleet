@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# fleet-watcher - Background process for detached fleet mode
+# Monitors worker status, sends Telegram notifications, polls for inbound messages.
+# Started by `fleet detach`, killed by `fleet attach`.
+
+BRIDGE_DIR="${1:?Usage: fleet-watcher <bridge_dir>}"
+FLEET_CONFIG_DIR="${HOME}/.fleet"
+TELEGRAM_CONFIG="${FLEET_CONFIG_DIR}/telegram.json"
+POLL_INTERVAL="${FLEET_POLL_INTERVAL:-10}"
+TELEGRAM_OFFSET_FILE="${BRIDGE_DIR}/.telegram_offset"
+MTIME_DIR="${BRIDGE_DIR}/.watcher_mtimes"
+
+mkdir -p "$MTIME_DIR" "${BRIDGE_DIR}/log"
+
+get_mtime() {
+  if [[ "$(uname)" == "Darwin" ]]; then
+    stat -f %m "$1" 2>/dev/null || echo 0
+  else
+    stat -c %Y "$1" 2>/dev/null || echo 0
+  fi
+}
+
+tg_configured() { [ -f "$TELEGRAM_CONFIG" ]; }
+
+tg_send() {
+  tg_configured || return 0
+  local token chat_id
+  token=$(jq -r .bot_token "$TELEGRAM_CONFIG")
+  chat_id=$(jq -r .chat_id "$TELEGRAM_CONFIG")
+  curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
+    -d chat_id="$chat_id" -d text="$1" -d parse_mode=Markdown > /dev/null 2>&1 || true
+}
+
+tg_poll() {
+  tg_configured || return 0
+  local token chat_id offset response
+  token=$(jq -r .bot_token "$TELEGRAM_CONFIG")
+  chat_id=$(jq -r .chat_id "$TELEGRAM_CONFIG")
+  offset=0
+  [ -f "$TELEGRAM_OFFSET_FILE" ] && offset=$(cat "$TELEGRAM_OFFSET_FILE")
+
+  response=$(curl -s "https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=0" 2>/dev/null) || return 0
+
+  local count
+  count=$(echo "$response" | jq '.result | length' 2>/dev/null) || return 0
+  [ "$count" -gt 0 ] || return 0
+
+  local i update_id text ts
+  for ((i = 0; i < count; i++)); do
+    update_id=$(echo "$response" | jq ".result[$i].update_id")
+    text=$(echo "$response" | jq -r ".result[$i].message.text // empty")
+    [ -n "$text" ] || continue
+
+    echo $((update_id + 1)) > "$TELEGRAM_OFFSET_FILE"
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    {
+      echo ""
+      echo "### Director message ($ts)"
+      echo "$text"
+    } >> "${BRIDGE_DIR}/briefing.md"
+    printf '{"ts":"%s","event":"telegram_inbound","text":"%s"}\n' \
+      "$ts" "$(echo "$text" | sed 's/"/\\"/g')" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
+    route_to_active_worker "$text" "$ts"
+  done
+}
+
+route_to_active_worker() {
+  local text="$1" ts="$2"
+  local latest_file="" latest_mtime=0
+  for sf in "${BRIDGE_DIR}"/status/*.json; do
+    [ -f "$sf" ] || continue
+    local mt
+    mt=$(get_mtime "$sf")
+    if [ "$mt" -gt "$latest_mtime" ]; then
+      latest_mtime=$mt
+      latest_file=$sf
+    fi
+  done
+  [ -n "$latest_file" ] || return 0
+
+  local worker_name
+  worker_name=$(basename "$latest_file" .json)
+  local msg_file="${BRIDGE_DIR}/messages/${worker_name}.md"
+  mkdir -p "${BRIDGE_DIR}/messages"
+  {
+    echo ""
+    echo "## Director message ($ts)"
+    echo "$text"
+  } >> "$msg_file"
+}
+
+check_status_changes() {
+  for sf in "${BRIDGE_DIR}"/status/*.json; do
+    [ -f "$sf" ] || continue
+    local name mt saved_mt
+    name=$(basename "$sf" .json)
+    mt=$(get_mtime "$sf")
+    saved_mt=0
+    [ -f "${MTIME_DIR}/${name}" ] && saved_mt=$(cat "${MTIME_DIR}/${name}")
+    [ "$mt" != "$saved_mt" ] || continue
+    echo "$mt" > "${MTIME_DIR}/${name}"
+
+    local phase summary needs_human ts
+    phase=$(jq -r '.phase // "unknown"' "$sf" 2>/dev/null) || continue
+    summary=$(jq -r '.summary // ""' "$sf" 2>/dev/null) || true
+    needs_human=$(jq -r '.needs_human // false' "$sf" 2>/dev/null) || true
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    case "$phase" in
+      done)
+        tg_send "*${name}* finished: ${summary}"
+        echo "- **${name}** finished ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md"
+        ;;
+      blocked|failed)
+        local decision recommendation stakes
+        decision=$(jq -r '.escalation.decision // empty' "$sf" 2>/dev/null) || true
+        recommendation=$(jq -r '.escalation.recommendation // empty' "$sf" 2>/dev/null) || true
+        stakes=$(jq -r '.escalation.stakes // "unknown"' "$sf" 2>/dev/null) || true
+
+        if [ -n "$decision" ]; then
+          tg_send "*${name}* needs you (${stakes} stakes):
+
+${decision}
+
+Recommendation: ${recommendation}"
+        else
+          tg_send "*${name}* is ${phase}: ${summary}"
+        fi
+        echo "- **${name}** ${phase} ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md"
+        ;;
+      *)
+        echo "- **${name}** ${phase} ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md"
+        ;;
+    esac
+    printf '{"ts":"%s","event":"status_change","worker":"%s","phase":"%s","summary":"%s"}\n' \
+      "$ts" "$name" "$phase" "$(echo "$summary" | sed 's/"/\\"/g')" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
+  done
+}
+
+echo "{\"ts\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"event\":\"watcher_started\",\"detail\":\"Polling every ${POLL_INTERVAL}s\"}" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
+
+while true; do
+  check_status_changes
+  tg_poll
+  sleep "$POLL_INTERVAL"
+done
