@@ -19,23 +19,36 @@ The developer becomes a director. The product manager becomes the bottleneck aga
 ## What it looks like
 
 ```
-You:    "Good morning! Let's tackle the open issues."
-Claude: Fetches issues, decomposes work, spawns 4 parallel sessions.
-        "4 sessions working. 8 queued. I'll dispatch more as slots open."
+You:    "The onboarding is losing people."
+Claude: "Before I dispatch work -- what's the signal? High drop-off on a specific
+         step, or a general feeling from customer feedback?"
 
-You:    "Status?"
-Claude: "issue-42 is blocked - can't find the pricing spec. What model should it use?"
-        "issue-38 finished - CI green. Want me to create a PR?"
-        "3 others actively implementing."
+You:    "Analytics show 60% drop at the profile setup step."
+Claude: "Got it. I'll decompose this into three parallel tracks:
+         1. Audit the current profile setup flow (code + UX)
+         2. Research how top products handle progressive profiling
+         3. Analyze the analytics data for patterns in who drops off
+         Assumptions: we want to keep the existing page structure and improve it,
+         not rebuild from scratch. Tests required. Correct?"
 
-You:    "Gross pricing, 25% tax. And yes, PR for 38."
-Claude: Sends pricing guidance to issue-42. Creates PR for issue-38.
+You:    "Yes. Go."
+Claude: "3 workers dispatched. Research has no dependencies. Audit and analytics
+         are independent. I'll synthesize findings when all three complete."
 
-You:    "Review PR 47 and leave comments on GitHub."
-Claude: Spawns a review session that reads the diff and posts review comments via gh.
+You:    [30 minutes later] "Status?"
+Claude: "Research done -- wrote findings to docs/onboarding-research.md.
+         Audit found the profile form makes 4 separate API calls on submit.
+         Analytics worker is blocked:
 
-You:    "I just had a call with a customer - their mobile check-in is broken."
-Claude: Spawns a session to investigate and fix, with full context from your description.
+         Decision needed: The analytics data is in two formats -- legacy events
+         and new Segment events. Should the worker analyze both or just Segment?
+         My recommendation: both, since the drop-off predates the Segment migration.
+         Stakes: low (it's an analysis task, easily re-run).
+
+         Approve my recommendation?"
+
+You:    "Yes, both."
+Claude: "Sent guidance. I'll have a synthesis ready when all three complete."
 ```
 
 No flags. No configuration files. No CLI to learn. Just conversation.
@@ -58,6 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/mountagency/fleet/main/install.sh |
 ```bash
 cp fleet ~/.local/bin/fleet && chmod +x ~/.local/bin/fleet
 mkdir -p ~/.claude/skills/fleet && cp skill/SKILL.md ~/.claude/skills/fleet/SKILL.md
+cp skill/WORKER_PROTOCOL.md ~/.claude/skills/fleet/WORKER_PROTOCOL.md
 ```
 
 ## Architecture
@@ -75,25 +89,25 @@ fleet attach                                         # Re-attach tmux
 fleet ls                                             # List worktrees (JSON)
 ```
 
-It creates git worktrees, manages tmux panes, starts Claude Code sessions with the worker protocol, and cleans up when done. It auto-detects your project type (Rails, Node, Python, Rust, Go, Elixir) for dependency installation. Nothing more. 150 lines of bash.
+It creates git worktrees, manages tmux panes, starts Claude Code sessions with the worker protocol, and cleans up when done. It auto-detects your project type (Rails, Node, Python, Rust, Go, Elixir) for dependency installation. Nothing more. Under 200 lines of bash.
 
 ### The skill: intelligence
 
-The `skill/SKILL.md` is where Fleet actually lives. It teaches Claude Code to be a tech lead:
+The `skill/SKILL.md` is where Fleet actually lives. It teaches Claude Code to be a chief of staff:
 
-- Decompose vague intent into concrete parallel tasks
-- Compose rich prompts so worker sessions start fully informed
-- Read bridge status files and give intelligent sitreps
-- Write messages to workers to unblock them
-- Manage a queue when there are more tasks than slots
-- Trigger reviews, create PRs, merge branches, post GitHub comments
+- Why-drill vague intent before dispatching work
+- Detect and surface assumptions so the director can confirm or correct
+- Escalate honestly when workers are blocked, with recommendations and stakes
+- Choose context strategies (full codebase, targeted files, discovery docs) per worker
+- Build dependency graphs so workers execute in the right order
+- Manage a task queue with priority and concurrency limits
 - Orchestrate the full lifecycle from idea to shipped code
 
 The skill doesn't limit what workers can do. Each worker is a full Claude Code session with access to everything: file editing, terminal, web search, GitHub CLI, MCP servers. The skill just teaches the bridge how to direct them.
 
-### The protocol: coordination
+### The worker protocol: coordination
 
-Worker sessions follow a lightweight file-based protocol:
+The `skill/WORKER_PROTOCOL.md` is a standalone document given to every worker session. It defines the checkpoint protocol and bridge file conventions:
 
 ```
 {repo}-fleet/
@@ -102,6 +116,8 @@ Worker sessions follow a lightweight file-based protocol:
     log/{session}.jsonl          # Append-only event history
     messages/{session}.md        # Bridge-to-worker instructions
     discoveries/{topic}.md       # Knowledge shared across sessions
+    queue.json                   # Task queue with priority and state
+    graph.json                   # Dependency graph across workers
 ```
 
 Workers write status after every phase change. The bridge reads it when you ask for a sitrep. Workers check for messages before major decisions. If they learn something non-obvious about the codebase, they write a discovery that other sessions can benefit from.
@@ -177,14 +193,13 @@ Fleet detects your stack and handles dependency installation automatically:
 
 ## Where this is going
 
-Fleet is early. It works today for parallelizing Claude Code sessions with coordination. Here's what we're building toward:
+Fleet v2 shipped the intelligent bridge (why-drilling, honest escalation, reactive coordination). Here's what's next:
 
-- **Persistent fleet memory.** Workers accumulate knowledge about your codebase over time. New sessions start smarter.
-- **Cross-session dependency awareness.** If session A changes a model that session B depends on, the bridge detects it and coordinates.
-- **Scheduled fleets.** Spin up a fleet overnight. Review the results in the morning.
+- **Telegram integration.** Direct the fleet from your phone. Get notified when workers complete or need decisions. Detach from the terminal and reattach with a full briefing.
+- **Persistent fleet memory.** Workers accumulate knowledge about your codebase. New sessions start with architecture maps, conventions, and gotchas from previous work.
+- **Director model.** Fleet learns your preferences, quality bar, and decomposition style. Fewer questions over time.
 - **Multi-repo support.** Direct work across repositories from a single bridge.
-- **Custom worker personas.** Specialized sessions for frontend, backend, security review, performance optimization.
-- **Fleet-to-fleet.** Bridge sessions that orchestrate other bridge sessions for truly large-scale work.
+- **Agent-agnostic backends.** The worker protocol is file-based and agent-agnostic. Pluggable backends for other AI coding tools are architecturally ready.
 
 ## Contributing
 
