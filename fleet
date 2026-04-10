@@ -43,6 +43,31 @@ err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 
 init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts} "$HOME/.fleet/directors"; }
 
+open_fleet_window() {
+  # Open a new terminal window attached to the fleet tmux session
+  tmux has-session -t "$SESSION" 2>/dev/null || return 0
+  # Check if already attached somewhere
+  local clients
+  clients=$(tmux list-clients -t "$SESSION" 2>/dev/null | wc -l | tr -d ' ')
+  [ "$clients" -gt 0 ] && return 0  # Already visible
+  if [[ "$(uname)" == "Darwin" ]]; then
+    local term_app
+    term_app=$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null)
+    osascript -e "
+      tell application \"$term_app\"
+        activate
+        delay 0.1
+      end tell
+      tell application \"System Events\"
+        keystroke \"t\" using command down
+        delay 0.3
+        keystroke \"fleet attach\"
+        key code 36
+      end tell
+    " > /dev/null 2>&1 || true
+  fi
+}
+
 ensure_watcher() {
   # Start watcher if not already running
   if [ -f "${BRIDGE_DIR}/state.json" ]; then
@@ -114,9 +139,11 @@ cmd_spawn() {
   echo "{\"session\":\"${name}\",\"phase\":\"starting\",\"summary\":\"Session initializing\",\"files_changed\":[],\"needs_human\":false,\"blocked_reason\":null,\"escalation\":null,\"ci_status\":null,\"started_at\":\"${now}\",\"updated_at\":\"${now}\"}" > "$BRIDGE_DIR/status/${name}.json"
   echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${name}.jsonl"
 
+  local first_spawn=false
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux split-pane -t "$SESSION" -c "$worktree_dir"
   else
+    first_spawn=true
     tmux new-session -d -s "$SESSION" -c "$worktree_dir" -x "$(tput cols)" -y "$(tput lines)"
     tmux set-option -t "$SESSION" remain-on-exit off
   fi
@@ -132,6 +159,7 @@ cmd_spawn() {
   sleep 3
   tmux send-keys -t "$SESSION" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
   tmux select-layout -t "$SESSION" tiled
+  $first_spawn && open_fleet_window
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
 }
 
