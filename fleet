@@ -97,18 +97,16 @@ cmd_spawn() {
     tmux set-option -t "$SESSION" remain-on-exit off
   fi
 
-  # Write a launcher script that tmux executes
-  local launcher="${BRIDGE_DIR}/worker-prompts/${name}-launch.sh"
-  {
-    echo "#!/usr/bin/env bash"
-    if ! $no_install; then
-      local ic=$(detect_install_cmd "$REPO_ROOT")
-      [ -n "$ic" ] && echo "$ic"
-    fi
-    echo "exec claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --permission-mode acceptEdits -p \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-task.md')\""
-  } > "$launcher"
-  chmod +x "$launcher"
-  tmux send-keys -t "$SESSION" "bash '${launcher}'" Enter
+  # Start claude interactively with protocol as system prompt
+  local install_cmd=""
+  if ! $no_install; then
+    install_cmd=$(detect_install_cmd "$REPO_ROOT")
+    [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
+  fi
+  tmux send-keys -t "$SESSION" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --permission-mode acceptEdits" Enter
+  # Wait for Claude to initialize, then send the task as first message
+  sleep 3
+  tmux send-keys -t "$SESSION" "$(cat "${BRIDGE_DIR}/worker-prompts/${name}-task.md")" Enter
   tmux select-layout -t "$SESSION" tiled
   echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
 }
