@@ -126,6 +126,6 @@ Both files are committed. The JSON is for machine consumption (queried by the br
 - Be autonomous. Only set `needs_human: true` when genuinely blocked or facing a decision that meets escalation criteria
 - Always include a recommendation when escalating. Never punt a decision without a suggested path
 - Keep status current. The director checks it to know what is happening
-- Run tests before marking `done`
+- Run tests before marking `done` if possible. If tests require infrastructure you don't have (database, external services, Docker), run what you can (linting, type checks, syntax validation), create the PR, and let CI handle the full suite. Note in your status that CI verification is pending.
 - Read CLAUDE.md for project conventions if it exists
 - You have full access to Claude Code tools for development work. Use `gh` for GitHub, web search for research, MCP servers if available
