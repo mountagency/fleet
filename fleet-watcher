@@ -64,9 +64,9 @@ tg_poll() {
     } >> "${BRIDGE_DIR}/briefing.md"
     printf '{"ts":"%s","event":"telegram_inbound","text":"%s"}\n' \
       "$ts" "$(echo "$text" | sed 's/"/\\"/g')" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
-    # Try to handle as a command, otherwise route to active worker
+    # Try as a simple command first, then use Claude to interpret
     if ! handle_command "$text" "$ts"; then
-      route_to_active_worker "$text" "$ts"
+      handle_with_bridge "$text" "$ts"
     fi
   done
 }
@@ -122,29 +122,69 @@ handle_command() {
   return 1  # Not a command, route to worker
 }
 
-route_to_active_worker() {
+handle_with_bridge() {
   local text="$1" ts="$2"
-  local latest_file="" latest_mtime=0
+  tg_send "Thinking..."
+
+  # Build context: current fleet state
+  local context="The director sent this message via Telegram while detached:\n\n\"${text}\"\n\n"
+  context+="Current fleet state:\n"
   for sf in "${BRIDGE_DIR}"/status/*.json; do
     [ -f "$sf" ] || continue
-    local mt
-    mt=$(get_mtime "$sf")
-    if [ "$mt" -gt "$latest_mtime" ]; then
-      latest_mtime=$mt
-      latest_file=$sf
-    fi
+    local n p s
+    n=$(basename "$sf" .json)
+    p=$(jq -r '.phase // "unknown"' "$sf" 2>/dev/null)
+    s=$(jq -r '.summary // ""' "$sf" 2>/dev/null)
+    context+="- ${n}: ${p} -- ${s}\n"
   done
-  [ -n "$latest_file" ] || return 0
+  [ -f "${BRIDGE_DIR}/queue.json" ] && context+="\nQueue: $(cat "${BRIDGE_DIR}/queue.json")\n"
 
-  local worker_name
-  worker_name=$(basename "$latest_file" .json)
-  local msg_file="${BRIDGE_DIR}/messages/${worker_name}.md"
-  mkdir -p "${BRIDGE_DIR}/messages"
-  {
-    echo ""
-    echo "## Director message ($ts)"
-    echo "$text"
-  } >> "$msg_file"
+  # Find the repo root from the fleet base directory
+  local repo_root=""
+  for d in "${FLEET_BASE%%-fleet}" "${FLEET_BASE%-fleet}"; do
+    [ -d "$d/.git" ] && { repo_root="$d"; break; }
+  done
+  [ -z "$repo_root" ] && repo_root="$(cd "$FLEET_BASE" && git rev-parse --show-toplevel 2>/dev/null || echo "$HOME")"
+
+  local prompt
+  prompt=$(cat <<PROMPT
+You are the Fleet bridge handling a Telegram message from the director who is away from the terminal.
+
+${context}
+
+Bridge directory: ${BRIDGE_DIR}
+Repo root: ${repo_root}
+
+Your job:
+1. Interpret what the director wants
+2. Take action using the fleet CLI or by writing to bridge files
+3. Respond with a SHORT message (1-3 sentences) that I will send back via Telegram
+
+Available commands:
+- fleet spawn <name> --prompt "..." (run from repo root)
+- fleet stop <name>
+- Write to _bridge/messages/{worker}.md to send instructions to a worker
+
+Rules:
+- If the director wants to start new work, use fleet spawn with a rich prompt
+- If they're giving guidance to an existing worker, write to that worker's message file
+- If they're asking a question, answer it from the status files
+- Be decisive. Don't ask clarifying questions -- make your best judgment
+- Your LAST line of output will be sent to the director via Telegram. Make it informative and concise.
+PROMPT
+)
+
+  local response
+  response=$(cd "$repo_root" && claude --print --dangerously-skip-permissions -p "$prompt" 2>/dev/null | tail -5) || {
+    tg_send "Couldn't process that. Try a direct command like: spawn <name> <task>"
+    return 0
+  }
+
+  # Send the last meaningful line(s) back via Telegram
+  local reply
+  reply=$(echo "$response" | grep -v '^$' | tail -3)
+  [ -n "$reply" ] && tg_send "$reply" || tg_send "Done."
+  echo "- **Bridge handled Telegram message** ($ts): ${text}" >> "${BRIDGE_DIR}/briefing.md"
 }
 
 check_status_changes() {
