@@ -3,7 +3,13 @@ set -euo pipefail
 # fleet-watch-github - GitHub event poller for Fleet Watch
 # Polls issues, PRs, and CI runs via gh api. Writes new events to bridge files.
 
-BRIDGE_DIR="${1:?Usage: fleet-watch-github <bridge_dir>}"
+ONCE_MODE=false
+if [[ "${1:-}" == "--once" ]]; then
+  ONCE_MODE=true
+  shift
+fi
+
+BRIDGE_DIR="${1:?Usage: fleet-watch-github [--once] <bridge_dir>}"
 POLL_INTERVAL="${WATCH_POLL_INTERVAL:-60}"
 TELEGRAM_CONFIG="${HOME}/.fleet/telegram.json"
 STATE_FILE="${BRIDGE_DIR}/watch-state.json"
@@ -131,5 +137,6 @@ while true; do
   poll_endpoint "pulls"  "repos/${REPO_SLUG}/pulls?state=open&sort=created&direction=desc&per_page=10"
   poll_endpoint "runs"   "repos/${REPO_SLUG}/actions/runs?status=failure&per_page=5"
   state_set ".last_poll = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  $ONCE_MODE && exit 0
   sleep "$POLL_INTERVAL"
 done

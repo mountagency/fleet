@@ -81,7 +81,7 @@ ensure_watcher() {
   [ ! -f "$watcher_path" ] && return 0  # No watcher available, skip silently
   "$watcher_path" "$BRIDGE_DIR" &
   local watcher_pid=$!
-  echo "{\"mode\":\"active\",\"watcher_pid\":${watcher_pid}}" > "${BRIDGE_DIR}/state.json"
+  jq -n --argjson pid "$watcher_pid" '{mode: "active", watcher_pid: $pid}' > "${BRIDGE_DIR}/state.json"
 }
 
 kill_watcher() {
@@ -141,8 +141,10 @@ cmd_spawn() {
   echo "$worker_protocol" > "${BRIDGE_DIR}/worker-prompts/${name}-protocol.md"
   echo "$prompt" > "${BRIDGE_DIR}/worker-prompts/${name}-task.md"
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  echo "{\"session\":\"${name}\",\"phase\":\"starting\",\"summary\":\"Session initializing\",\"files_changed\":[],\"needs_human\":false,\"blocked_reason\":null,\"escalation\":null,\"ci_status\":null,\"started_at\":\"${now}\",\"updated_at\":\"${now}\"}" > "$BRIDGE_DIR/status/${name}.json"
-  echo "{\"ts\":\"${now}\",\"event\":\"started\",\"detail\":\"Session created\"}" > "$BRIDGE_DIR/log/${name}.jsonl"
+  jq -n --arg session "$name" --arg now "$now" \
+    '{session: $session, phase: "starting", summary: "Session initializing", files_changed: [], needs_human: false, blocked_reason: null, escalation: null, ci_status: null, started_at: $now, updated_at: $now}' \
+    > "$BRIDGE_DIR/status/${name}.json"
+  jq -n --arg ts "$now" '{ts: $ts, event: "started", detail: "Session created"}' > "$BRIDGE_DIR/log/${name}.jsonl"
 
   local first_spawn=false pane_id
   if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -177,7 +179,8 @@ cmd_spawn() {
   tmux send-keys -t "$pane_id" Enter
   tmux select-layout -t "$SESSION" tiled
   open_fleet_window
-  echo "{\"name\":\"${name}\",\"branch\":\"${branch}\",\"worktree\":\"${worktree_dir}\",\"bridge\":\"${BRIDGE_DIR}\"}"
+  jq -n --arg name "$name" --arg branch "$branch" --arg worktree "$worktree_dir" --arg bridge "$BRIDGE_DIR" \
+    '{name: $name, branch: $branch, worktree: $worktree, bridge: $bridge}'
 }
 
 # ── stop ─────────────────────────────────────────────────────────────
@@ -217,17 +220,16 @@ cmd_stop() {
 # ── ls ───────────────────────────────────────────────────────────────
 cmd_ls() {
   [ ! -d "$FLEET_BASE" ] && { echo "[]"; return; }
-  echo "["
-  local first=true
+  local result="[]"
   for dir in "$FLEET_BASE"/*/; do
     [ -d "$dir" ] || continue
-    local n=$(basename "$dir"); [ "$n" = "_bridge" ] && continue
+    local n; n=$(basename "$dir"); [ "$n" = "_bridge" ] && continue
     local status="{}"; [ -f "${BRIDGE_DIR}/status/${n}.json" ] && status=$(cat "${BRIDGE_DIR}/status/${n}.json")
     local branch; branch=$(git -C "$dir" branch --show-current 2>/dev/null || echo "unknown")
-    $first || echo ","; first=false
-    echo "  {\"name\":\"${n}\",\"branch\":\"${branch}\",\"worktree\":\"${dir}\",\"status\":${status}}"
+    result=$(echo "$result" | jq --arg name "$n" --arg branch "$branch" --arg worktree "$dir" --argjson status "$status" \
+      '. + [{name: $name, branch: $branch, worktree: $worktree, status: $status}]')
   done
-  echo "]"
+  echo "$result"
 }
 
 # ── resume ───────────────────────────────────────────────────────────
@@ -261,7 +263,8 @@ cmd_attach() {
   else err "No fleet session. Spawn one first: fleet spawn <name>"; exit 1; fi
 }
 
-cmd_info() { echo "{\"repo\":\"${REPO_NAME}\",\"repo_root\":\"${REPO_ROOT}\",\"fleet_base\":\"${FLEET_BASE}\",\"bridge\":\"${BRIDGE_DIR}\",\"tmux_session\":\"${SESSION}\"}"; }
+cmd_info() { jq -n --arg repo "$REPO_NAME" --arg repo_root "$REPO_ROOT" --arg fleet_base "$FLEET_BASE" --arg bridge "$BRIDGE_DIR" --arg tmux_session "$SESSION" \
+  '{repo: $repo, repo_root: $repo_root, fleet_base: $fleet_base, bridge: $bridge, tmux_session: $tmux_session}'; }
 
 # ── telegram ────────────────────────────────────────────────────────
 FLEET_CONFIG_DIR="${HOME}/.fleet"
@@ -281,7 +284,7 @@ telegram_setup() {
     [ "$attempt" -lt 3 ] && { log "Waiting for message to arrive..."; sleep 2; }
   done
   [ -z "$chat_id" ] && { err "Could not detect chat_id. Make sure you sent a message to the bot."; exit 1; }
-  echo "{\"bot_token\":\"${bot_token}\",\"chat_id\":\"${chat_id}\"}" > "$TELEGRAM_CONFIG"
+  jq -n --arg bot_token "$bot_token" --arg chat_id "$chat_id" '{bot_token: $bot_token, chat_id: $chat_id}' > "$TELEGRAM_CONFIG"
   curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
     -d chat_id="$chat_id" -d text="Fleet connected!" -d parse_mode=Markdown > /dev/null
   log "Telegram configured! Config saved to ${TELEGRAM_CONFIG}"

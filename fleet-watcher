@@ -245,6 +245,28 @@ check_status_changes() {
     esac
     printf '{"ts":"%s","event":"status_change","worker":"%s","phase":"%s","summary":"%s"}\n' \
       "$ts" "$name" "$phase" "$(echo "$summary" | sed 's/"/\\"/g')" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
+
+    # Stale worker detection: warn if updated_at is older than 10 minutes and not in a terminal phase
+    if [[ "$phase" != "done" && "$phase" != "failed" ]]; then
+      local updated_at
+      updated_at=$(jq -r '.updated_at // empty' "$sf" 2>/dev/null) || true
+      if [[ -n "$updated_at" ]]; then
+        local updated_epoch now_epoch age_seconds
+        if [[ "$(uname)" == "Darwin" ]]; then
+          updated_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$updated_at" +%s 2>/dev/null) || updated_epoch=0
+        else
+          updated_epoch=$(date -d "$updated_at" +%s 2>/dev/null) || updated_epoch=0
+        fi
+        now_epoch=$(date +%s)
+        age_seconds=$(( now_epoch - updated_epoch ))
+        if [[ "$age_seconds" -gt 600 ]]; then
+          local stale_mins=$(( age_seconds / 60 ))
+          tg_send "⚠️ *${name}* may be stale: phase *${phase}* unchanged for ${stale_mins}m"
+          printf '{"ts":"%s","event":"stale_warning","worker":"%s","phase":"%s","age_minutes":%d}\n' \
+            "$ts" "$name" "$phase" "$stale_mins" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
+        fi
+      fi
+    fi
   done
 }
 
