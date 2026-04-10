@@ -121,18 +121,19 @@ Every worker prompt should contain:
 4. **Done criteria**: what "finished" looks like -- PR created, tests passing, doc committed, etc.
 5. **Tools to use**: `gh pr create`, `gh pr review`, web search, specific test commands
 
-### Reading Existing Knowledge
+### Context Assembly Pipeline
 
-Before composing prompts, consult prior context:
-- `.fleet/knowledge/architecture.md` -- system structure, component relationships
-- `.fleet/knowledge/conventions.md` -- coding patterns to follow
-- `.fleet/knowledge/gotchas.md` -- pitfalls to warn workers about
-- `.fleet/knowledge/patterns.md` -- orchestration strategies (consult during decomposition)
-- `.fleet/sessions/` -- digests from past worker sessions touching the same area
-- `_bridge/discoveries/` -- findings from current fleet workers
-- `~/.fleet/directors/{username}.md` -- director preferences (consult before why-drilling and escalation)
+Before composing a worker prompt, run this pipeline to assemble relevant context. It's best-effort -- if the index doesn't exist, fall back to reading knowledge files and including what seems relevant.
 
-Include relevant knowledge in worker prompts. Don't include everything -- match knowledge to the work type and affected area.
+1. **File-level relevance**: Extract file/class/method mentions from the task. Match against `.fleet/index/codebase.json` if it exists. Scoring: explicit mention=1.0, import neighbor=0.6, same feature=0.4.
+2. **Feature expansion**: If matched files belong to features in the index, pull in related files at reduced relevance. Skip features with >20 files (include description only).
+3. **History enrichment**: Query `.fleet/index/sessions.json` for sessions that touched matched files/features. Include summaries of the 3 most recent relevant sessions. Check `_bridge/discoveries/` for related findings.
+4. **Knowledge inclusion**: From `.fleet/knowledge/`, include only what's relevant -- conventions for the work type, gotchas for matched files, architecture context for the affected area (not the whole doc). Consult `~/.fleet/directors/{username}.md` for director preferences.
+5. **Compose context package**: Structure as a markdown section in the worker prompt:
+   - **Relevant Files** -- paths with one-line descriptions
+   - **Key Context** -- verbatim snippets for bug fixes, architecture summaries for features
+   - **Conventions & Gotchas** -- applicable rules and pitfalls
+   - **Recent History** -- what recent sessions did in this area
 
 ---
 
@@ -232,7 +233,7 @@ When the director greets with work intent:
 
 1. Assess clarity (see above). Why-drill if needed
 2. Decompose into parallel units
-3. Compose context-rich prompts for each worker
+3. Run the context assembly pipeline (see above) for each worker's scope, then compose prompts with the assembled context
 4. Build dependency graph
 5. Spawn independent workers, queue dependent ones
 6. Confirm to director: what was dispatched, what's queued, what the graph looks like
@@ -280,23 +281,13 @@ Write to `_bridge/messages/{session}.md`. Workers check this file at mandatory c
 
 ### Session Distillation
 
-After a worker completes, extract a digest to `.fleet/sessions/{name}.md`:
+After a worker completes:
 
-```markdown
-## {name}
-**Outcome:** [PR #N created | committed to branch | research complete]
+1. Read its `.fleet/sessions/{name}.json` (structured digest written by the worker)
+2. Append an index entry to `.fleet/index/sessions.json` with: `name`, `completed_at`, `tags`, `files_touched`, `features`, `summary`
+3. Use the index during context assembly: query sessions by `files_touched` or `features` overlap with the new task
 
-### What was done
-- [Key actions]
-
-### Decisions made
-- [Decision and reasoning]
-
-### Discoveries
-- [Non-obvious findings that affect future work]
-```
-
-This creates institutional memory. Future prompts reference these digests.
+The worker also writes `.fleet/sessions/{name}.md` for human readability. Both are committed by the worker.
 
 ---
 
