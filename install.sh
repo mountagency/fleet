@@ -37,6 +37,15 @@ fi
 chmod +x "$INSTALL_DIR/fleet"
 log "Installed fleet to $INSTALL_DIR/fleet"
 
+# Download fleet-watcher
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "https://raw.githubusercontent.com/mountagency/fleet/main/fleet-watcher" -o "$INSTALL_DIR/fleet-watcher"
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO "$INSTALL_DIR/fleet-watcher" "https://raw.githubusercontent.com/mountagency/fleet/main/fleet-watcher"
+fi
+chmod +x "$INSTALL_DIR/fleet-watcher"
+log "Installed fleet-watcher to $INSTALL_DIR/fleet-watcher"
+
 # Install Claude Code skill
 mkdir -p "$SKILL_DIR"
 if command -v curl >/dev/null 2>&1; then
