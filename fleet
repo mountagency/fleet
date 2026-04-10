@@ -161,7 +161,7 @@ cmd_spawn() {
     install_cmd=$(detect_install_cmd "$REPO_ROOT")
     [ -n "$install_cmd" ] && install_cmd="${install_cmd} && "
   fi
-  tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --dangerously-skip-permissions" Enter
+  tmux send-keys -t "$pane_id" "${install_cmd}claude --append-system-prompt \"\$(cat '${BRIDGE_DIR}/worker-prompts/${name}-protocol.md')\" --allowedTools 'Bash(*)' Read Edit Write Glob Grep Agent WebFetch WebSearch" Enter
   # Wait for Claude to be ready in this specific pane, then send the task
   local attempt
   for attempt in $(seq 1 30); do
