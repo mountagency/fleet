@@ -65,9 +65,11 @@ echo '{"ts":"...","event":"...","detail":"..."}' >> BRIDGE_DIR/log/SESSION_NAME.
 
 Log these events: session start, each checkpoint read, key decisions, discoveries, errors, completion.
 
-## Discoveries
+## Discoveries and Knowledge
 
 Write non-obvious findings to `BRIDGE_DIR/discoveries/{topic-slug}.md`. Other sessions benefit from these. Include context on why the finding matters and how it affects the work.
+
+If you discover something durable (an architectural pattern, a convention, a recurring pitfall), also check `.fleet/knowledge/` in your worktree. If the finding belongs in `architecture.md`, `conventions.md`, or `gotchas.md`, append it there and commit it with your branch. The bridge will review and incorporate it.
 
 ## Session Digest
 
