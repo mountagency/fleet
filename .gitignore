@@ -2,4 +2,6 @@ CLAUDE.md
 .claude/
 .DS_Store
 .fleet-workers/
-docs/
+docs/specs/
+docs/plans/
+docs/superpowers/
