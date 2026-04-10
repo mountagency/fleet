@@ -53,6 +53,19 @@ Claude: "Sent guidance. I'll have a synthesis ready when all three complete."
 
 No flags. No configuration files. No CLI to learn. Just conversation.
 
+**From your phone (Telegram):**
+```
+Fleet:  "fix-calendar done. PR #84, tests green. Merge? [Yes / Review first]"
+You:    "Yes"
+Fleet:  "Merged. Dispatching next from queue: refactor-billing."
+
+Fleet:  "auth-refactor needs a decision (high stakes):
+         PKCE or auth code flow? I recommend PKCE -- simpler,
+         better for mobile. Reply A or B."
+You:    "A"
+Fleet:  "Sent to auth-refactor. It'll pick up at next checkpoint."
+```
+
 ## Install
 
 ```bash
@@ -70,6 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/mountagency/fleet/main/install.sh |
 
 ```bash
 cp fleet ~/.local/bin/fleet && chmod +x ~/.local/bin/fleet
+cp fleet-watcher ~/.local/bin/fleet-watcher && chmod +x ~/.local/bin/fleet-watcher
 mkdir -p ~/.claude/skills/fleet && cp skill/SKILL.md ~/.claude/skills/fleet/SKILL.md
 cp skill/WORKER_PROTOCOL.md ~/.claude/skills/fleet/WORKER_PROTOCOL.md
 ```
@@ -173,6 +187,33 @@ Fleet creates a tmux session with one pane per worker. You don't need to know tm
 | `Ctrl-b` + arrows | Move between panes |
 | `Ctrl-b z` | Zoom/unzoom current pane (fullscreen toggle) |
 | `fleet attach` | Re-attach to the session |
+
+## Telegram notifications
+
+Fleet can send you notifications via Telegram when workers complete, get blocked, or need decisions. You can reply from your phone.
+
+### Setup
+
+```bash
+fleet telegram setup
+```
+
+This walks you through creating a Telegram bot and connecting it to Fleet. One-time setup.
+
+### Detach / Reattach
+
+```bash
+fleet detach     # Fleet keeps working, notifications go to Telegram
+fleet attach     # Come back, get a briefing of what happened
+```
+
+While detached:
+- Workers keep running in tmux
+- Completions and blockers trigger Telegram notifications
+- You can reply via Telegram ("merge it", "use option A", "stop that worker")
+- When you reattach, Claude gives you a structured briefing of everything that happened
+
+This means you can start a fleet, walk to a meeting, approve a PR from your phone, and come back to find everything merged and the next batch of work in progress.
 
 ## Project type detection
 
