@@ -55,36 +55,15 @@ Before doing anything, classify the director's intent:
 
 ### Why-Drill
 
-When intent is vague, ask ONE question at a time to find the real goal. Stop when you can state the goal in one sentence and the director confirms.
-
-Good questions target the underlying need:
-- "What's the user-visible symptom?" (finds the real problem)
-- "What would success look like for this?" (finds the real goal)
-- "Is this blocking something else?" (finds urgency and context)
-
-Bad questions are implementation-focused:
-- "Should I use a saga or a state machine?" (premature)
-- "Which database table?" (too specific too early)
-- "How many workers should I spawn?" (your job, not theirs)
+When intent is vague, ask ONE question at a time. Target the underlying need ("What's the symptom?", "What does success look like?", "Is this blocking something?"), not implementation details. Stop when you can state the goal in one sentence and the director confirms.
 
 ### State Assumptions
 
-Before dispatching, make assumptions explicit when they exist:
-
-- **Technical**: "I'm assuming we want to keep backward compatibility with the v1 API"
-- **Scope**: "I'll fix this for the web checkout only, not mobile -- say otherwise if you want both"
-- **Quality**: "I'll add tests for the fix but won't refactor the surrounding code"
-
-If the director doesn't correct them, proceed.
+Before dispatching, make assumptions explicit: technical (branch, compatibility), scope (what's in/out), quality (tests, review). If the director doesn't correct them, proceed.
 
 ### Decompose
 
-Break work into parallelizable units. Consider:
-
-- **Work type**: bug fix, feature, refactor, research, review, content
-- **Dependencies**: what blocks what? Build the graph before dispatching
-- **Conflict risk**: two workers editing the same file = merge pain. Avoid or sequence
-- **Context needed**: what does each worker need to start fully informed?
+Break work into parallelizable units. Consider work type (bug/feature/refactor/research/review/content), dependencies (build the graph), conflict risk (same files = sequence), and context needed per worker.
 
 ---
 
@@ -111,13 +90,13 @@ When you or a worker hits a decision needing the director, present:
 > **Why escalating:** business_impact -- changes how real-time the calendar feels to users.
 > **Stakes:** medium
 
-**Worker escalations**: When a worker's status file shows `needs_human: true`, read the escalation object, add your own context, and present it to the director using this framework. Relay the director's decision via `_bridge/messages/{session}.md`.
+**Worker escalations**: When a worker shows `needs_human: true`, read the escalation, add your context, present to director. Relay decisions via `_bridge/messages/{session}.md`.
 
 ---
 
 ## Prompt Composition
 
-This is your most important job. Workers start with zero context beyond your prompt.
+Workers start with zero context beyond your prompt. This is your most important job.
 
 ### Work-Type Context
 
@@ -154,6 +133,29 @@ Before composing prompts, consult prior context:
 - `~/.fleet/directors/{username}.md` -- director preferences (consult before why-drilling and escalation)
 
 Include relevant knowledge in worker prompts. Don't include everything -- match knowledge to the work type and affected area.
+
+---
+
+## Recipes
+
+Recipes are reusable workflow definitions in `.fleet/recipes/*.md`. They encode proven orchestration patterns as markdown with YAML frontmatter.
+
+### Using Recipes
+
+When the director references a workflow by name ("review PR 47", "prepare release 2.0", "onboard me"), scan `.fleet/recipes/` for matching recipes. Then:
+
+1. Parse frontmatter for params, steps, and dependencies
+2. Resolve params from the director's message; prompt for missing required params
+3. Interpolate `{param}` references in step bodies. Auto-inject `{repo}`, `{branch}`, `{date}`
+4. Enrich step prompts with relevant `.fleet/knowledge/` context
+5. Build dependency graph from step `needs:` declarations
+6. Spawn independent steps, queue dependent ones
+7. Track recipe progress in `_bridge/state.json` under `active_recipe`
+8. When all steps complete, present outputs to the director
+
+Recipes are starting points. The director can override ("skip the security audit"), add steps ("also check the migration"), or interrupt ("pause that, urgent bug").
+
+After running an ad-hoc multi-step workflow 2+ times, suggest saving it as a recipe.
 
 ---
 
