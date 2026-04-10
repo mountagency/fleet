@@ -6,6 +6,8 @@ set -euo pipefail
 # Started by `fleet detach`, killed by `fleet attach`.
 
 BRIDGE_DIR="${1:?Usage: fleet-watcher <bridge_dir>}"
+FLEET_BASE="$(dirname "$BRIDGE_DIR")"
+FLEET_CMD="${FLEET_INSTALL_DIR:-$HOME/.local/bin}/fleet"
 FLEET_CONFIG_DIR="${HOME}/.fleet"
 TELEGRAM_CONFIG="${FLEET_CONFIG_DIR}/telegram.json"
 POLL_INTERVAL="${FLEET_POLL_INTERVAL:-10}"
@@ -62,8 +64,62 @@ tg_poll() {
     } >> "${BRIDGE_DIR}/briefing.md"
     printf '{"ts":"%s","event":"telegram_inbound","text":"%s"}\n' \
       "$ts" "$(echo "$text" | sed 's/"/\\"/g')" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
-    route_to_active_worker "$text" "$ts"
+    # Try to handle as a command, otherwise route to active worker
+    if ! handle_command "$text" "$ts"; then
+      route_to_active_worker "$text" "$ts"
+    fi
   done
+}
+
+# ── Command handling ─────────────────────────────────────────────────
+handle_command() {
+  local text="$1" ts="$2"
+  local lower
+  lower=$(echo "$text" | tr '[:upper:]' '[:lower:]')
+
+  # spawn <name> <prompt...>
+  if [[ "$lower" =~ ^spawn[[:space:]] ]]; then
+    local rest="${text#*[[:space:]]}"
+    local name="${rest%%[[:space:]]*}"
+    local prompt="${rest#*[[:space:]]}"
+    [ "$prompt" = "$name" ] && prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
+    tg_send "Spawning *${name}*..."
+    if "$FLEET_CMD" spawn "$name" --prompt "$prompt" > /dev/null 2>&1; then
+      tg_send "*${name}* spawned and working."
+      echo "- **Spawned ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md"
+    else
+      tg_send "Failed to spawn *${name}*. Check the terminal."
+      echo "- **Failed to spawn ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md"
+    fi
+    return 0
+  fi
+
+  # stop <name>
+  if [[ "$lower" =~ ^stop[[:space:]] ]]; then
+    local name="${text#*[[:space:]]}"
+    tg_send "Stopping *${name}*..."
+    "$FLEET_CMD" stop "$name" > /dev/null 2>&1 && tg_send "*${name}* stopped." || tg_send "Could not stop *${name}*."
+    echo "- **Stopped ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md"
+    return 0
+  fi
+
+  # status
+  if [[ "$lower" =~ ^(status|sitrep|what.s.happening) ]]; then
+    local msg="*Fleet status:*"$'\n'
+    for sf in "${BRIDGE_DIR}"/status/*.json; do
+      [ -f "$sf" ] || continue
+      local n p s
+      n=$(basename "$sf" .json)
+      p=$(jq -r '.phase // "unknown"' "$sf" 2>/dev/null)
+      s=$(jq -r '.summary // ""' "$sf" 2>/dev/null)
+      msg+="- *${n}*: ${p} -- ${s}"$'\n'
+    done
+    [ "$msg" = "*Fleet status:*"$'\n' ] && msg="No active workers."
+    tg_send "$msg"
+    return 0
+  fi
+
+  return 1  # Not a command, route to worker
 }
 
 route_to_active_worker() {
