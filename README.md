@@ -232,13 +232,25 @@ Fleet detects your stack and handles dependency installation automatically:
 | `go.mod` | `go mod download` |
 | `mix.exs` | `mix deps.get` |
 
+## Fleet learns
+
+Fleet gets smarter the more you use it. Three types of knowledge accumulate:
+
+**Codebase knowledge** (`.fleet/knowledge/`) -- committed to your repo. As workers explore the codebase, Fleet records architecture, conventions, and gotchas. New workers start with institutional knowledge instead of cold-reading the repo.
+
+**Execution patterns** (`.fleet/knowledge/patterns.md`) -- committed to your repo. Fleet records what orchestration strategies work: which tasks parallelize safely, where conflicts happen, what takes longer than expected. Decomposition improves over time.
+
+**Director model** (`~/.fleet/directors/`) -- local to your machine. Fleet learns your preferences: how you decompose problems, your quality bar, your communication style. Fewer clarifying questions over time.
+
+All knowledge is plain markdown. No database, no service. Read it, edit it, delete it. It's your data.
+
 ## Where this is going
 
 Fleet v2 shipped the intelligent bridge (why-drilling, honest escalation, reactive coordination). Here's what's next:
 
 - **Telegram integration.** Direct the fleet from your phone. Get notified when workers complete or need decisions. Detach from the terminal and reattach with a full briefing.
-- **Persistent fleet memory.** Workers accumulate knowledge about your codebase. New sessions start with architecture maps, conventions, and gotchas from previous work.
-- **Director model.** Fleet learns your preferences, quality bar, and decomposition style. Fewer questions over time.
+- **~~Persistent fleet memory.~~** Shipped. Workers accumulate knowledge in `.fleet/knowledge/`.
+- **~~Director model.~~** Shipped. Fleet learns preferences in `~/.fleet/directors/`.
 - **Multi-repo support.** Direct work across repositories from a single bridge.
 - **Agent-agnostic backends.** The worker protocol is file-based and agent-agnostic. Pluggable backends for other AI coding tools are architecturally ready.
 
