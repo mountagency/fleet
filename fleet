@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Usage:
 #   fleet spawn <name> [--from ref] [--prompt "..." | --prompt-file path]
-#   fleet stop [names...]   |  fleet attach  |  fleet detach  |  fleet ls
-#   fleet telegram setup|send|test  |  fleet info
+#   fleet stop [names...]   |  fleet attach  |  fleet ls  |  fleet info
+#   fleet resume <name> ["prompt"]  |  fleet telegram setup|send|test
 
 # ── Project detection ────────────────────────────────────────────────
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -43,6 +43,29 @@ err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 
 init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts} "$HOME/.fleet/directors"; }
 
+ensure_watcher() {
+  # Start watcher if not already running
+  if [ -f "${BRIDGE_DIR}/state.json" ]; then
+    local pid
+    pid=$(jq -r '.watcher_pid // empty' "${BRIDGE_DIR}/state.json" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+  fi
+  local watcher_path="${FLEET_INSTALL_DIR:-$HOME/.local/bin}/fleet-watcher"
+  [ ! -f "$watcher_path" ] && watcher_path="$(dirname "$0")/fleet-watcher"
+  [ ! -f "$watcher_path" ] && return 0  # No watcher available, skip silently
+  "$watcher_path" "$BRIDGE_DIR" &
+  local watcher_pid=$!
+  echo "{\"mode\":\"active\",\"watcher_pid\":${watcher_pid}}" > "${BRIDGE_DIR}/state.json"
+}
+
+kill_watcher() {
+  [ -f "${BRIDGE_DIR}/state.json" ] || return 0
+  local pid
+  pid=$(jq -r '.watcher_pid // empty' "${BRIDGE_DIR}/state.json" 2>/dev/null)
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  rm -f "${BRIDGE_DIR}/state.json"
+}
+
 # ── Worker protocol ──────────────────────────────────────────────────
 PROTOCOL_FILE="${FLEET_SKILL_DIR:-$HOME/.claude/skills/fleet}/WORKER_PROTOCOL.md"
 
@@ -74,6 +97,7 @@ cmd_spawn() {
   [ -z "$prompt" ] && prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
 
   init_bridge
+  ensure_watcher
   local worktree_dir="${FLEET_BASE}/${name}" branch="fleet/${name}"
   mkdir -p "$FLEET_BASE"
   if [ -d "$worktree_dir" ]; then warn "Worktree exists, reusing"
@@ -116,6 +140,7 @@ cmd_stop() {
   local targets=("$@")
   if [ ${#targets[@]} -eq 0 ]; then
     log "Tearing down all fleet worktrees..."
+    kill_watcher
     tmux kill-session -t "$SESSION" 2>/dev/null && log "Killed tmux session" || true
     if [ -d "$FLEET_BASE" ]; then
       for dir in "$FLEET_BASE"/*/; do
@@ -185,33 +210,8 @@ cmd_resume() {
   log "Resumed ${name}"
 }
 
-# ── detach / attach ──────────────────────────────────────────────────
-cmd_detach() {
-  [ ! -d "$BRIDGE_DIR" ] && { err "No active fleet. Spawn workers first."; exit 1; }
-  local watcher_path="${FLEET_INSTALL_DIR:-$HOME/.local/bin}/fleet-watcher"
-  [ ! -f "$watcher_path" ] && watcher_path="$(dirname "$0")/fleet-watcher"
-  [ ! -f "$watcher_path" ] && { err "fleet-watcher not found. Run install.sh."; exit 1; }
-  "$watcher_path" "$BRIDGE_DIR" &
-  local watcher_pid=$! now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  echo "{\"mode\":\"detached\",\"detached_at\":\"${now}\",\"watcher_pid\":${watcher_pid}}" > "${BRIDGE_DIR}/state.json"
-  echo -e "# Fleet Briefing\n\nDetached at ${now}\n" > "${BRIDGE_DIR}/briefing.md"
-  log "Fleet detached. Watcher running (PID ${watcher_pid})."
-  [ -f "${FLEET_CONFIG_DIR:-$HOME/.fleet}/telegram.json" ] && log "Telegram notifications active." || warn "No Telegram configured. Run 'fleet telegram setup' for notifications."
-  log "Run 'fleet attach' to reattach with a briefing."
-}
-
+# ── attach ───────────────────────────────────────────────────────────
 cmd_attach() {
-  if [ -f "${BRIDGE_DIR}/state.json" ] 2>/dev/null; then
-    local mode watcher_pid
-    mode=$(jq -r '.mode // empty' "${BRIDGE_DIR}/state.json" 2>/dev/null)
-    watcher_pid=$(jq -r '.watcher_pid // empty' "${BRIDGE_DIR}/state.json" 2>/dev/null)
-    if [ "$mode" = "detached" ] && [ -n "$watcher_pid" ]; then
-      kill "$watcher_pid" 2>/dev/null || true
-      echo "{\"mode\":\"live\",\"reattached_at\":\"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",\"watcher_pid\":null}" > "${BRIDGE_DIR}/state.json"
-      log "Watcher stopped. Reattached."
-      [ -f "${BRIDGE_DIR}/briefing.md" ] && { echo ""; cat "${BRIDGE_DIR}/briefing.md"; echo ""; }
-    fi
-  fi
   if tmux has-session -t "$SESSION" 2>/dev/null; then tmux attach -t "$SESSION"
   else err "No fleet session. Spawn one first: fleet spawn <name>"; exit 1; fi
 }
@@ -268,7 +268,6 @@ case "${1:-}" in
   stop)     shift; cmd_stop "$@" ;;
   resume)   shift; cmd_resume "$1" "${*:2}" ;;
   attach)   cmd_attach ;;
-  detach)   cmd_detach ;;
   ls)       cmd_ls ;;
   info)     cmd_info ;;
   telegram) shift; cmd_telegram "$@" ;;
