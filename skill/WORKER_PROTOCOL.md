@@ -73,7 +73,25 @@ If you discover something durable (an architectural pattern, a convention, a rec
 
 ## Session Digest
 
-Before marking `done`, write `.fleet/session.md` in the worktree root and commit it:
+Before marking `done`, write BOTH a structured JSON digest and a human-readable markdown digest, then commit them.
+
+### Structured digest: `.fleet/sessions/SESSION_NAME.json`
+
+```json
+{
+  "session": "SESSION_NAME",
+  "completed_at": "ISO-8601",
+  "outcome": "PR #N created | committed | research complete",
+  "tags": ["feature-area", "technology"],
+  "files_touched": ["path/to/file.rb"],
+  "features": ["checkout", "payments"],
+  "decisions": [{"what": "...", "why": "..."}],
+  "discoveries": ["finding 1", "finding 2"],
+  "summary": "One paragraph summary"
+}
+```
+
+### Markdown digest: `.fleet/sessions/SESSION_NAME.md`
 
 ```markdown
 ## Session: SESSION_NAME
@@ -92,7 +110,7 @@ Outcome: [PR created / committed / research complete / etc.]
 - [List]
 ```
 
-This creates a breadcrumb trail for future sessions working in the same area.
+Both files are committed. The JSON is for machine consumption (queried by the bridge during context assembly). The markdown is for humans browsing the repo.
 
 ## Output Quality
 

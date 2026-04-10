@@ -280,23 +280,13 @@ Write to `_bridge/messages/{session}.md`. Workers check this file at mandatory c
 
 ### Session Distillation
 
-After a worker completes, extract a digest to `.fleet/sessions/{name}.md`:
+After a worker completes:
 
-```markdown
-## {name}
-**Outcome:** [PR #N created | committed to branch | research complete]
+1. Read its `.fleet/sessions/{name}.json` (structured digest written by the worker)
+2. Append an index entry to `.fleet/index/sessions.json` with: `name`, `completed_at`, `tags`, `files_touched`, `features`, `summary`
+3. Use the index during context assembly: query sessions by `files_touched` or `features` overlap with the new task
 
-### What was done
-- [Key actions]
-
-### Decisions made
-- [Decision and reasoning]
-
-### Discoveries
-- [Non-obvious findings that affect future work]
-```
-
-This creates institutional memory. Future prompts reference these digests.
+The worker also writes `.fleet/sessions/{name}.md` for human readability. Both are committed by the worker.
 
 ---
 
