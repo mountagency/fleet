@@ -199,8 +199,12 @@ telegram_setup() {
   [ -z "$bot_token" ] && { err "Token cannot be empty."; exit 1; }
   log "Now send any message to your bot in Telegram, then press Enter here."
   read -r
-  local chat_id
-  chat_id=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates" | jq -r '.result[-1].message.chat.id // empty')
+  local chat_id attempt
+  for attempt in 1 2 3; do
+    chat_id=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates" | jq -r '.result[-1].message.chat.id // empty')
+    [ -n "$chat_id" ] && break
+    [ "$attempt" -lt 3 ] && { log "Waiting for message to arrive..."; sleep 2; }
+  done
   [ -z "$chat_id" ] && { err "Could not detect chat_id. Make sure you sent a message to the bot."; exit 1; }
   echo "{\"bot_token\":\"${bot_token}\",\"chat_id\":\"${chat_id}\"}" > "$TELEGRAM_CONFIG"
   curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
