@@ -55,6 +55,11 @@ tg_poll() {
     text=$(echo "$response" | jq -r ".result[$i].message.text // empty")
     [ -n "$text" ] || continue
 
+    # Validate sender matches configured chat_id
+    local msg_chat_id
+    msg_chat_id=$(echo "$response" | jq -r ".result[$i].message.chat.id // empty")
+    [ "$msg_chat_id" = "$chat_id" ] || continue
+
     echo $((update_id + 1)) > "$TELEGRAM_OFFSET_FILE"
     ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     {
@@ -71,6 +76,12 @@ tg_poll() {
   done
 }
 
+validate_name() {
+  local name="$1"
+  [ -z "$name" ] && return 1
+  [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || return 1
+}
+
 # ── Command handling ─────────────────────────────────────────────────
 handle_command() {
   local text="$1" ts="$2"
@@ -83,6 +94,10 @@ handle_command() {
     local name="${rest%%[[:space:]]*}"
     local prompt="${rest#*[[:space:]]}"
     [ "$prompt" = "$name" ] && prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
+    if ! validate_name "$name"; then
+      tg_send "Invalid worker name: ${name}"
+      return 0
+    fi
     tg_send "Spawning *${name}*..."
     if "$FLEET_CMD" spawn "$name" --prompt "$prompt" > /dev/null 2>&1; then
       tg_send "*${name}* spawned and working."
@@ -100,6 +115,10 @@ handle_command() {
     local name="${rest%%[[:space:]]*}"
     local prompt="${rest#*[[:space:]]}"
     [ "$prompt" = "$name" ] && prompt=""
+    if ! validate_name "$name"; then
+      tg_send "Invalid worker name: ${name}"
+      return 0
+    fi
     tg_send "Resuming *${name}*..."
     if "$FLEET_CMD" resume "$name" "$prompt" > /dev/null 2>&1; then
       tg_send "*${name}* resumed."
@@ -113,6 +132,10 @@ handle_command() {
   # stop <name>
   if [[ "$lower" =~ ^stop[[:space:]] ]]; then
     local name="${text#*[[:space:]]}"
+    if ! validate_name "$name"; then
+      tg_send "Invalid worker name: ${name}"
+      return 0
+    fi
     tg_send "Stopping *${name}*..."
     "$FLEET_CMD" stop "$name" > /dev/null 2>&1 && tg_send "*${name}* stopped." || tg_send "Could not stop *${name}*."
     echo "- **Stopped ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md"
@@ -192,7 +215,7 @@ PROMPT
 )
 
   local response
-  response=$(cd "$repo_root" && claude --print --dangerously-skip-permissions -p "$prompt" 2>/dev/null | tail -5) || {
+  response=$(cd "$repo_root" && claude --print --allowedTools 'Bash(*)' Read Edit Write Glob Grep -p "$prompt" 2>/dev/null | tail -5) || {
     tg_send "Could not process that. Try a direct command like: spawn <name> <task>"
     return 0
   }

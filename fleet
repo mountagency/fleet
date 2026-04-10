@@ -42,6 +42,15 @@ log()  { echo -e "${GREEN}[fleet]${NC} $*"; }
 warn() { echo -e "${YELLOW}[fleet]${NC} $*"; }
 err()  { echo -e "${RED}[fleet]${NC} $*" >&2; }
 
+validate_name() {
+  local name="$1"
+  [ -z "$name" ] && { err "Name cannot be empty"; exit 1; }
+  if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+    err "Invalid name '${name}': must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    exit 1
+  fi
+}
+
 init_bridge() { mkdir -p "$BRIDGE_DIR"/{status,log,messages,discoveries,worker-prompts} "$HOME/.fleet/directors"; }
 
 open_fleet_window() {
@@ -119,6 +128,7 @@ cmd_spawn() {
     esac
   done
   [ -z "$name" ] && { err "Usage: fleet spawn <name> [--from <ref>] [--prompt \"...\"]"; exit 1; }
+  validate_name "$name"
   [ -n "$prompt_file" ] && [ -f "$prompt_file" ] && prompt=$(cat "$prompt_file")
   [ -z "$prompt" ] && prompt="You are working on: ${name}. Read CLAUDE.md for project conventions if it exists."
 
@@ -234,6 +244,7 @@ cmd_ls() {
 cmd_resume() {
   local name="${1:-}" prompt="${2:-}"
   [ -z "$name" ] && { err "Usage: fleet resume <name> [\"prompt\"]"; exit 1; }
+  validate_name "$name"
   local worktree_dir="${FLEET_BASE}/${name}"
   [ -d "$worktree_dir" ] || { err "No worktree for '${name}'"; exit 1; }
   tmux has-session -t "$SESSION" 2>/dev/null || { err "No fleet tmux session"; exit 1; }
@@ -282,6 +293,7 @@ telegram_setup() {
   done
   [ -z "$chat_id" ] && { err "Could not detect chat_id. Make sure you sent a message to the bot."; exit 1; }
   echo "{\"bot_token\":\"${bot_token}\",\"chat_id\":\"${chat_id}\"}" > "$TELEGRAM_CONFIG"
+  chmod 600 "$TELEGRAM_CONFIG"
   curl -s -X POST "https://api.telegram.org/bot${bot_token}/sendMessage" \
     -d chat_id="$chat_id" -d text="Fleet connected!" -d parse_mode=Markdown > /dev/null
   log "Telegram configured! Config saved to ${TELEGRAM_CONFIG}"
