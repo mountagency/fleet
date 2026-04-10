@@ -62,11 +62,11 @@ tg_poll() {
 
     echo $((update_id + 1)) > "$TELEGRAM_OFFSET_FILE"
     ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    (flock -x 200
+    {
       echo ""
       echo "### Director message ($ts)"
       echo "$text"
-    ) >> "${BRIDGE_DIR}/briefing.md" 200>"${BRIDGE_DIR}/.briefing.lock"
+    } >> "${BRIDGE_DIR}/briefing.md"
     printf '{"ts":"%s","event":"telegram_inbound","text":"%s"}\n' \
       "$ts" "$(echo "$text" | sed 's/"/\\"/g')" >> "${BRIDGE_DIR}/log/_watcher.jsonl"
     # Try as a simple command first, then use Claude to interpret
@@ -101,10 +101,10 @@ handle_command() {
     tg_send "Spawning *${name}*..."
     if "$FLEET_CMD" spawn "$name" --prompt "$prompt" > /dev/null 2>&1; then
       tg_send "*${name}* spawned and working."
-      (flock -x 200; echo "- **Spawned ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+      (echo "- **Spawned ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md")
     else
       tg_send "Failed to spawn *${name}*. Check the terminal."
-      (flock -x 200; echo "- **Failed to spawn ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+      (echo "- **Failed to spawn ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md")
     fi
     return 0
   fi
@@ -122,7 +122,7 @@ handle_command() {
     tg_send "Resuming *${name}*..."
     if "$FLEET_CMD" resume "$name" "$prompt" > /dev/null 2>&1; then
       tg_send "*${name}* resumed."
-      (flock -x 200; echo "- **Resumed ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+      (echo "- **Resumed ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md")
     else
       tg_send "Could not resume *${name}*."
     fi
@@ -138,7 +138,7 @@ handle_command() {
     fi
     tg_send "Stopping *${name}*..."
     "$FLEET_CMD" stop "$name" > /dev/null 2>&1 && tg_send "*${name}* stopped." || tg_send "Could not stop *${name}*."
-    (flock -x 200; echo "- **Stopped ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+    (echo "- **Stopped ${name}** via Telegram ($ts)" >> "${BRIDGE_DIR}/briefing.md")
     return 0
   fi
 
@@ -224,7 +224,7 @@ PROMPT
   local reply
   reply=$(echo "$response" | grep -v '^$' | tail -3)
   [ -n "$reply" ] && tg_send "$reply" || tg_send "Done."
-  (flock -x 200; echo "- **Bridge handled Telegram message** ($ts): ${text}" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+  (echo "- **Bridge handled Telegram message** ($ts): ${text}" >> "${BRIDGE_DIR}/briefing.md")
 }
 
 check_status_changes() {
@@ -247,7 +247,7 @@ check_status_changes() {
     case "$phase" in
       done)
         tg_send "*${name}* finished: ${summary}"
-        (flock -x 200; echo "- **${name}** finished ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+        (echo "- **${name}** finished ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md")
         ;;
       blocked|failed)
         local decision recommendation stakes
@@ -260,10 +260,10 @@ check_status_changes() {
         else
           tg_send "*${name}* is ${phase}: ${summary}"
         fi
-        (flock -x 200; echo "- **${name}** ${phase} ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+        (echo "- **${name}** ${phase} ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md")
         ;;
       *)
-        (flock -x 200; echo "- **${name}** ${phase} ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md") 200>"${BRIDGE_DIR}/.briefing.lock"
+        (echo "- **${name}** ${phase} ($ts): ${summary}" >> "${BRIDGE_DIR}/briefing.md")
         ;;
     esac
     printf '{"ts":"%s","event":"status_change","worker":"%s","phase":"%s","summary":"%s"}\n' \
